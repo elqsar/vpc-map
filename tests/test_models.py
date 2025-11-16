@@ -1,6 +1,5 @@
 """Tests for data models."""
 
-import pytest
 from vpc_map.models import (
     AuditCategory,
     AuditFinding,

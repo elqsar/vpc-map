@@ -53,9 +53,7 @@ class VpcVisualizer:
             return f"{prefix}-{suffix[:8]}..."
         return resource_id
 
-    def create_diagram(
-        self, output_file: str = "vpc_topology", format: str = "png"
-    ) -> Path:
+    def create_diagram(self, output_file: str = "vpc_topology", format: str = "png") -> Path:
         """
         Create VPC topology diagram.
 

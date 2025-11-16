@@ -181,7 +181,8 @@ class TerminalReporter:
                 emoji = self.SEVERITY_EMOJI.get(severity, "")
                 color = self.SEVERITY_COLORS.get(severity, "white")
                 severity_table.add_row(
-                    f"[{color}]{emoji} {severity.value.upper()}[/{color}]", f"[{color}]{count}[/{color}]"
+                    f"[{color}]{emoji} {severity.value.upper()}[/{color}]",
+                    f"[{color}]{count}[/{color}]",
                 )
 
         self.console.print(severity_table)

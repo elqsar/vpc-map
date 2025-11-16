@@ -1,6 +1,5 @@
 """Tests for audit rules."""
 
-import pytest
 from vpc_map.audit.aws_waf import AWSWellArchitectedAuditor
 from vpc_map.audit.cis import CISBenchmarkAuditor
 from vpc_map.audit.custom import CustomSecurityAuditor

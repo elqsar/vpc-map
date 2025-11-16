@@ -190,9 +190,7 @@ class VpcCollector:
                     routes.append(
                         Route(
                             destination_cidr_block=route_data.get("DestinationCidrBlock"),
-                            destination_ipv6_cidr_block=route_data.get(
-                                "DestinationIpv6CidrBlock"
-                            ),
+                            destination_ipv6_cidr_block=route_data.get("DestinationIpv6CidrBlock"),
                             gateway_id=route_data.get("GatewayId"),
                             nat_gateway_id=route_data.get("NatGatewayId"),
                             network_interface_id=route_data.get("NetworkInterfaceId"),
