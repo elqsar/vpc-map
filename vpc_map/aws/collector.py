@@ -3,7 +3,7 @@
 from typing import Optional
 
 import boto3
-from botocore.exceptions import BotoCoreError, ClientError
+from botocore.exceptions import ClientError
 
 from vpc_map.models import (
     InternetGateway,

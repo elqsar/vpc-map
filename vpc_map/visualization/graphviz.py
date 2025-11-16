@@ -1,7 +1,6 @@
 """VPC topology visualization using Graphviz."""
 
 from pathlib import Path
-from typing import Optional
 
 import graphviz
 

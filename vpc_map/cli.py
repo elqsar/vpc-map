@@ -115,7 +115,7 @@ def analyze(vpc_id, region, profile, output_dir, format, diagram_format, no_diag
         # Generate diagram
         diagram_path = None
         if not no_diagram:
-            console.print(f"[cyan]Generating topology diagram...[/cyan]")
+            console.print("[cyan]Generating topology diagram...[/cyan]")
             visualizer = VpcVisualizer(topology)
             diagram_path = visualizer.create_diagram(
                 output_file=str(output_dir / "vpc_topology"),
@@ -133,7 +133,7 @@ def analyze(vpc_id, region, profile, output_dir, format, diagram_format, no_diag
         # Run audit
         audit_report = None
         if not no_audit:
-            console.print(f"[cyan]Running security audit...[/cyan]")
+            console.print("[cyan]Running security audit...[/cyan]")
             audit_engine = AuditEngine(topology)
             audit_report = audit_engine.run_audit()
             console.print(f"[green]✓[/green] Audit completed ({audit_report.total_checks} checks)")
@@ -145,20 +145,20 @@ def analyze(vpc_id, region, profile, output_dir, format, diagram_format, no_diag
             reporter.print_summary(topology, audit_report)
 
         if format == "json" or format == "all":
-            console.print(f"[cyan]Generating JSON report...[/cyan]")
+            console.print("[cyan]Generating JSON report...[/cyan]")
             json_reporter = JSONReporter()
             json_output = output_dir / "vpc_report.json"
             json_reporter.generate_combined_report(topology, audit_report, json_output)
             console.print(f"[green]✓[/green] JSON report saved to {json_output}")
 
         if format == "html" or format == "all":
-            console.print(f"[cyan]Generating HTML report...[/cyan]")
+            console.print("[cyan]Generating HTML report...[/cyan]")
             html_reporter = HTMLReporter()
             html_output = output_dir / "vpc_report.html"
             html_reporter.generate_report(topology, audit_report, html_output, diagram_path)
             console.print(f"[green]✓[/green] HTML report saved to {html_output}")
 
-        console.print(f"\n[bold green]Analysis complete![/bold green]")
+        console.print("\n[bold green]Analysis complete![/bold green]")
         console.print(f"Output directory: {output_dir.absolute()}")
 
     except ValueError as e:
@@ -209,7 +209,7 @@ def diagram_only(vpc_id, region, profile, output_dir, format):
         collector = VpcCollector(region=region, profile=profile)
         topology = collector.collect_vpc_topology(vpc_id)
 
-        console.print(f"[cyan]Generating diagrams...[/cyan]")
+        console.print("[cyan]Generating diagrams...[/cyan]")
         visualizer = VpcVisualizer(topology)
 
         # Topology diagram
@@ -226,7 +226,7 @@ def diagram_only(vpc_id, region, profile, output_dir, format):
         )
         console.print(f"[green]✓[/green] Security diagram: {security_path}")
 
-        console.print(f"\n[bold green]Diagrams generated![/bold green]")
+        console.print("\n[bold green]Diagrams generated![/bold green]")
 
     except Exception as e:
         console.print(f"[red]Error: {str(e)}[/red]")
@@ -270,7 +270,7 @@ def audit_only(vpc_id, region, profile, output_dir, format):
         collector = VpcCollector(region=region, profile=profile)
         topology = collector.collect_vpc_topology(vpc_id)
 
-        console.print(f"[cyan]Running security audit...[/cyan]")
+        console.print("[cyan]Running security audit...[/cyan]")
         audit_engine = AuditEngine(topology)
         report = audit_engine.run_audit()
 
@@ -291,7 +291,7 @@ def audit_only(vpc_id, region, profile, output_dir, format):
             html_reporter.generate_report(topology, report, html_output)
             console.print(f"[green]✓[/green] HTML report: {html_output}")
 
-        console.print(f"\n[bold green]Audit complete![/bold green]")
+        console.print("\n[bold green]Audit complete![/bold green]")
 
     except Exception as e:
         console.print(f"[red]Error: {str(e)}[/red]")

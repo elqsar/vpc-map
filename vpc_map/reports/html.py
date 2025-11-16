@@ -5,7 +5,7 @@ from pathlib import Path
 
 from jinja2 import Template
 
-from vpc_map.models import AuditReport, Severity, VpcTopology
+from vpc_map.models import AuditReport, VpcTopology
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
