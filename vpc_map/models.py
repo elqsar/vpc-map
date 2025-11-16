@@ -162,6 +162,8 @@ class SecurityGroup(BaseModel):
     ingress_rules: list[IpPermission] = Field(default_factory=list)
     egress_rules: list[IpPermission] = Field(default_factory=list)
     tags: list[Tag] = Field(default_factory=list)
+    attached_enis: list[str] = Field(default_factory=list)  # Network interface IDs using this SG
+    is_in_use: bool = False  # Whether any resource uses this security group
 
     def get_tag(self, key: str) -> Optional[str]:
         """Get tag value by key."""

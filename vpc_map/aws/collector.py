@@ -342,6 +342,37 @@ class VpcCollector:
                 e.response["Error"]["Code"],
             )
 
+    def get_security_group_usage(self, vpc_id: str) -> dict[str, list[str]]:
+        """
+        Get security group usage by querying network interfaces.
+
+        Args:
+            vpc_id: VPC ID to check
+
+        Returns:
+            Dictionary mapping security group IDs to list of ENI IDs using them
+        """
+        try:
+            response = self.ec2_client.describe_network_interfaces(
+                Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]
+            )
+
+            usage = {}  # sg_id -> list of eni_ids
+            for eni in response.get("NetworkInterfaces", []):
+                eni_id = eni["NetworkInterfaceId"]
+                for group in eni.get("Groups", []):
+                    sg_id = group["GroupId"]
+                    if sg_id not in usage:
+                        usage[sg_id] = []
+                    usage[sg_id].append(eni_id)
+
+            return usage
+        except ClientError as e:
+            raise ClientError(
+                f"Failed to get security group usage: {e.response['Error']['Message']}",
+                e.response["Error"]["Code"],
+            )
+
     def collect_vpc_topology(self, vpc_id: str) -> VpcTopology:
         """
         Collect complete VPC topology.
@@ -364,6 +395,18 @@ class VpcCollector:
             route_tables = self.get_route_tables(vpc_id)
             security_groups = self.get_security_groups(vpc_id)
             network_acls = self.get_network_acls(vpc_id)
+
+            # Get security group usage information
+            sg_usage = self.get_security_group_usage(vpc_id)
+
+            # Populate usage information for each security group
+            for sg in security_groups:
+                if sg.group_id in sg_usage:
+                    sg.attached_enis = sg_usage[sg.group_id]
+                    sg.is_in_use = True
+                else:
+                    sg.attached_enis = []
+                    sg.is_in_use = False
 
             return VpcTopology(
                 vpc=vpc,

@@ -69,6 +69,8 @@ class JSONReporter:
                     "nat_gateways": len(topology.nat_gateways),
                     "route_tables": len(topology.route_tables),
                     "security_groups": len(topology.security_groups),
+                    "security_groups_in_use": len([sg for sg in topology.security_groups if sg.is_in_use]),
+                    "security_groups_unused": len([sg for sg in topology.security_groups if not sg.is_in_use]),
                     "network_acls": len(topology.network_acls),
                 },
                 "audit_summary": {

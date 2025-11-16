@@ -121,10 +121,19 @@ class TerminalReporter:
         sg_table.add_column("ID", style="yellow")
         sg_table.add_column("Ingress Rules", justify="right", style="green")
         sg_table.add_column("Egress Rules", justify="right", style="blue")
+        sg_table.add_column("In Use", justify="center", style="magenta")
+        sg_table.add_column("Attached ENIs", justify="right", style="blue")
 
         for sg in topology.security_groups:
+            in_use_indicator = "✓" if sg.is_in_use else "✗"
+            in_use_style = "green" if sg.is_in_use else "red"
             sg_table.add_row(
-                sg.group_name, sg.group_id, str(len(sg.ingress_rules)), str(len(sg.egress_rules))
+                sg.group_name,
+                sg.group_id,
+                str(len(sg.ingress_rules)),
+                str(len(sg.egress_rules)),
+                f"[{in_use_style}]{in_use_indicator}[/{in_use_style}]",
+                str(len(sg.attached_enis)),
             )
 
         self.console.print(sg_table)

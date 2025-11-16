@@ -300,6 +300,8 @@ HTML_TEMPLATE = """
                     <th>ID</th>
                     <th>Ingress Rules</th>
                     <th>Egress Rules</th>
+                    <th>In Use</th>
+                    <th>Attached ENIs</th>
                 </tr>
             </thead>
             <tbody>
@@ -309,6 +311,14 @@ HTML_TEMPLATE = """
                     <td><code>{{ sg.group_id }}</code></td>
                     <td>{{ sg.ingress_count }}</td>
                     <td>{{ sg.egress_count }}</td>
+                    <td style="text-align: center;">
+                        {% if sg.is_in_use %}
+                            <span style="color: #27ae60; font-weight: bold;">✓</span>
+                        {% else %}
+                            <span style="color: #e74c3c; font-weight: bold;">✗</span>
+                        {% endif %}
+                    </td>
+                    <td style="text-align: center;">{{ sg.attached_enis_count }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -425,6 +435,8 @@ class HTMLReporter:
                     "group_id": sg.group_id,
                     "ingress_count": len(sg.ingress_rules),
                     "egress_count": len(sg.egress_rules),
+                    "is_in_use": sg.is_in_use,
+                    "attached_enis_count": len(sg.attached_enis),
                 }
                 for sg in topology.security_groups
             ],
