@@ -6,6 +6,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from vpc_map.models import (
+    EbsVolume,
     InternetGateway,
     IpPermission,
     NatGateway,
@@ -371,6 +372,65 @@ class VpcCollector:
                 e.response["Error"]["Code"],
             )
 
+    def get_ebs_volumes(self, vpc_id: str) -> list[EbsVolume]:
+        """
+        Get all EBS volumes attached to instances in a VPC.
+
+        Args:
+            vpc_id: VPC ID to check
+
+        Returns:
+            List of EBS volumes
+        """
+        try:
+            # First, get all instances in the VPC to find their volumes
+            instances_response = self.ec2_client.describe_instances(
+                Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]
+            )
+
+            # Collect all volume IDs from instances in this VPC
+            volume_ids = set()
+            for reservation in instances_response.get("Reservations", []):
+                for instance in reservation.get("Instances", []):
+                    for bdm in instance.get("BlockDeviceMappings", []):
+                        if "Ebs" in bdm and "VolumeId" in bdm["Ebs"]:
+                            volume_ids.add(bdm["Ebs"]["VolumeId"])
+
+            # If no volumes found, return empty list
+            if not volume_ids:
+                return []
+
+            # Get detailed information for all volumes
+            volumes_response = self.ec2_client.describe_volumes(VolumeIds=list(volume_ids))
+
+            ebs_volumes = []
+            for vol_data in volumes_response.get("Volumes", []):
+                ebs_volumes.append(
+                    EbsVolume(
+                        volume_id=vol_data["VolumeId"],
+                        size=vol_data["Size"],
+                        volume_type=vol_data["VolumeType"],
+                        state=vol_data["State"],
+                        availability_zone=vol_data["AvailabilityZone"],
+                        encrypted=vol_data.get("Encrypted", False),
+                        kms_key_id=vol_data.get("KmsKeyId"),
+                        iops=vol_data.get("Iops"),
+                        throughput=vol_data.get("Throughput"),
+                        multi_attach_enabled=vol_data.get("MultiAttachEnabled", False),
+                        snapshot_id=vol_data.get("SnapshotId"),
+                        attachments=vol_data.get("Attachments", []),
+                        create_time=vol_data.get("CreateTime"),
+                        tags=self._parse_tags(vol_data.get("Tags")),
+                    )
+                )
+
+            return ebs_volumes
+        except ClientError as e:
+            raise ClientError(
+                f"Failed to get EBS volumes: {e.response['Error']['Message']}",
+                e.response["Error"]["Code"],
+            )
+
     def collect_vpc_topology(self, vpc_id: str) -> VpcTopology:
         """
         Collect complete VPC topology.
@@ -393,6 +453,7 @@ class VpcCollector:
             route_tables = self.get_route_tables(vpc_id)
             security_groups = self.get_security_groups(vpc_id)
             network_acls = self.get_network_acls(vpc_id)
+            ebs_volumes = self.get_ebs_volumes(vpc_id)
 
             # Get security group usage information
             sg_usage = self.get_security_group_usage(vpc_id)
@@ -414,6 +475,7 @@ class VpcCollector:
                 route_tables=route_tables,
                 security_groups=security_groups,
                 network_acls=network_acls,
+                ebs_volumes=ebs_volumes,
                 region=self.region,
             )
         except Exception as e:

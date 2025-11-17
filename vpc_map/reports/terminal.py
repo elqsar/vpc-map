@@ -64,6 +64,7 @@ class TerminalReporter:
         summary_table.add_row("Route Tables", str(len(topology.route_tables)))
         summary_table.add_row("Security Groups", str(len(topology.security_groups)))
         summary_table.add_row("Network ACLs", str(len(topology.network_acls)))
+        summary_table.add_row("EBS Volumes", str(len(topology.ebs_volumes)))
 
         self.console.print(summary_table)
 
@@ -137,6 +138,37 @@ class TerminalReporter:
             )
 
         self.console.print(sg_table)
+
+        # EBS Volumes
+        if topology.ebs_volumes:
+            ebs_table = Table(title="EBS Volumes", show_header=True)
+            ebs_table.add_column("Volume ID", style="cyan")
+            ebs_table.add_column("Name", style="yellow")
+            ebs_table.add_column("Size (GiB)", justify="right", style="green")
+            ebs_table.add_column("Type", style="blue")
+            ebs_table.add_column("State", style="magenta")
+            ebs_table.add_column("Encrypted", justify="center", style="cyan")
+            ebs_table.add_column("Attached To", style="green")
+
+            for vol in topology.ebs_volumes:
+                vol_name = vol.get_tag("Name") or "-"
+                encrypted_indicator = "✓" if vol.encrypted else "✗"
+                encrypted_style = "green" if vol.encrypted else "red"
+
+                # Get instance IDs this volume is attached to
+                instance_ids = ", ".join(vol.instance_ids) if vol.instance_ids else "-"
+
+                ebs_table.add_row(
+                    vol.volume_id,
+                    vol_name,
+                    str(vol.size),
+                    vol.volume_type,
+                    vol.state,
+                    f"[{encrypted_style}]{encrypted_indicator}[/{encrypted_style}]",
+                    instance_ids,
+                )
+
+            self.console.print(ebs_table)
 
     def print_audit_report(self, report: AuditReport) -> None:
         """

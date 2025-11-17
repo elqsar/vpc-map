@@ -76,6 +76,14 @@ class JSONReporter:
                         [sg for sg in topology.security_groups if not sg.is_in_use]
                     ),
                     "network_acls": len(topology.network_acls),
+                    "ebs_volumes": len(topology.ebs_volumes),
+                    "ebs_volumes_encrypted": len(
+                        [vol for vol in topology.ebs_volumes if vol.encrypted]
+                    ),
+                    "ebs_volumes_unencrypted": len(
+                        [vol for vol in topology.ebs_volumes if not vol.encrypted]
+                    ),
+                    "ebs_total_size_gib": sum(vol.size for vol in topology.ebs_volumes),
                 },
                 "audit_summary": {
                     "total_checks": report.total_checks,
