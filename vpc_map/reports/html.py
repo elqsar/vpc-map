@@ -324,6 +324,92 @@ HTML_TEMPLATE = """
             </tbody>
         </table>
 
+        {% if ec2_instances %}
+        <h3>EC2 Instances ({{ ec2_instances|length }})</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Instance ID</th>
+                    <th>Type</th>
+                    <th>State</th>
+                    <th>AZ</th>
+                    <th>Private IP</th>
+                    <th>Public IP</th>
+                    <th>Launch Time</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for instance in ec2_instances %}
+                <tr>
+                    <td>{{ instance.name }}</td>
+                    <td><code>{{ instance.instance_id }}</code></td>
+                    <td>{{ instance.instance_type }}</td>
+                    <td>
+                        {% if instance.state == 'running' %}
+                            <span style="color: #27ae60; font-weight: bold;">{{ instance.state }}</span>
+                        {% elif instance.state == 'stopped' %}
+                            <span style="color: #e74c3c; font-weight: bold;">{{ instance.state }}</span>
+                        {% else %}
+                            <span style="color: #f39c12; font-weight: bold;">{{ instance.state }}</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ instance.availability_zone }}</td>
+                    <td>{{ instance.private_ip or '-' }}</td>
+                    <td>{{ instance.public_ip or '-' }}</td>
+                    <td>{{ instance.launch_time }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+
+        {% if ebs_volumes %}
+        <h3>EBS Volumes ({{ ebs_volumes|length }})</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Volume ID</th>
+                    <th>Size (GB)</th>
+                    <th>Type</th>
+                    <th>State</th>
+                    <th>AZ</th>
+                    <th>Encrypted</th>
+                    <th>Attached To</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for volume in ebs_volumes %}
+                <tr>
+                    <td>{{ volume.name }}</td>
+                    <td><code>{{ volume.volume_id }}</code></td>
+                    <td>{{ volume.size }}</td>
+                    <td>{{ volume.volume_type }}</td>
+                    <td>
+                        {% if volume.state == 'in-use' %}
+                            <span style="color: #27ae60; font-weight: bold;">{{ volume.state }}</span>
+                        {% elif volume.state == 'available' %}
+                            <span style="color: #3498db; font-weight: bold;">{{ volume.state }}</span>
+                        {% else %}
+                            <span style="color: #f39c12; font-weight: bold;">{{ volume.state }}</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ volume.availability_zone }}</td>
+                    <td style="text-align: center;">
+                        {% if volume.encrypted %}
+                            <span style="color: #27ae60; font-weight: bold;">✓</span>
+                        {% else %}
+                            <span style="color: #e74c3c; font-weight: bold;">✗</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ volume.attachments }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+
         <h2>Security Audit Findings</h2>
 
         {% if findings %}
@@ -404,6 +490,8 @@ class HTMLReporter:
                 + len(topology.route_tables)
                 + len(topology.security_groups)
                 + len(topology.network_acls)
+                + len(topology.ec2_instances)
+                + len(topology.ebs_volumes)
             ),
             "total_checks": report.total_checks,
             "passed_checks": report.passed_checks,
@@ -439,6 +527,36 @@ class HTMLReporter:
                     "attached_enis_count": len(sg.attached_enis),
                 }
                 for sg in topology.security_groups
+            ],
+            "ec2_instances": [
+                {
+                    "name": instance.get_tag("Name") or "-",
+                    "instance_id": instance.instance_id,
+                    "instance_type": instance.instance_type,
+                    "state": instance.state,
+                    "availability_zone": instance.availability_zone,
+                    "private_ip": instance.private_ip_address,
+                    "public_ip": instance.public_ip_address,
+                    "launch_time": instance.launch_time.strftime("%Y-%m-%d %H:%M:%S")
+                    if instance.launch_time
+                    else "-",
+                }
+                for instance in topology.ec2_instances
+            ],
+            "ebs_volumes": [
+                {
+                    "name": volume.get_tag("Name") or "-",
+                    "volume_id": volume.volume_id,
+                    "size": volume.size,
+                    "volume_type": volume.volume_type,
+                    "state": volume.state,
+                    "availability_zone": volume.availability_zone,
+                    "encrypted": volume.encrypted,
+                    "attachments": ", ".join(volume.instance_ids)
+                    if volume.instance_ids
+                    else "-",
+                }
+                for volume in topology.ebs_volumes
             ],
             "findings": [
                 {
