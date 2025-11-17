@@ -10,6 +10,7 @@ from vpc_map.aws.collector import VpcCollector
 from vpc_map.reports.html import HTMLReporter
 from vpc_map.reports.json import JSONReporter
 from vpc_map.reports.terminal import TerminalReporter
+from vpc_map.visualization.ascii import AsciiVisualizer
 from vpc_map.visualization.graphviz import VpcVisualizer
 
 console = Console()
@@ -87,7 +88,7 @@ def list_vpcs(region, profile):
 @click.option(
     "--diagram-format",
     help="Diagram format",
-    type=click.Choice(["png", "svg"], case_sensitive=False),
+    type=click.Choice(["png", "svg", "ascii"], case_sensitive=False),
     default="png",
 )
 @click.option(
@@ -115,20 +116,36 @@ def analyze(vpc_id, region, profile, output_dir, format, diagram_format, no_diag
         # Generate diagram
         diagram_path = None
         if not no_diagram:
-            console.print("[cyan]Generating topology diagram...[/cyan]")
-            visualizer = VpcVisualizer(topology)
-            diagram_path = visualizer.create_diagram(
-                output_file=str(output_dir / "vpc_topology"),
-                format=diagram_format,
-            )
-            console.print(f"[green]✓[/green] Diagram saved to {diagram_path}")
+            if diagram_format == "ascii":
+                console.print("[cyan]Generating ASCII routing diagram...[/cyan]")
+                ascii_visualizer = AsciiVisualizer(topology)
 
-            # Generate security diagram
-            security_diagram_path = visualizer.create_security_diagram(
-                output_file=str(output_dir / "vpc_security"),
-                format=diagram_format,
-            )
-            console.print(f"[green]✓[/green] Security diagram saved to {security_diagram_path}")
+                # Full routing diagram
+                routing_path = str(output_dir / "vpc_routing.txt")
+                ascii_visualizer.save_routing_diagram(routing_path, compact=False)
+                console.print(f"[green]✓[/green] ASCII routing diagram saved to {routing_path}")
+
+                # Compact routing diagram
+                compact_path = str(output_dir / "vpc_routing_compact.txt")
+                ascii_visualizer.save_routing_diagram(compact_path, compact=True)
+                console.print(f"[green]✓[/green] Compact ASCII diagram saved to {compact_path}")
+
+                diagram_path = routing_path
+            else:
+                console.print("[cyan]Generating topology diagram...[/cyan]")
+                visualizer = VpcVisualizer(topology)
+                diagram_path = visualizer.create_diagram(
+                    output_file=str(output_dir / "vpc_topology"),
+                    format=diagram_format,
+                )
+                console.print(f"[green]✓[/green] Diagram saved to {diagram_path}")
+
+                # Generate security diagram
+                security_diagram_path = visualizer.create_security_diagram(
+                    output_file=str(output_dir / "vpc_security"),
+                    format=diagram_format,
+                )
+                console.print(f"[green]✓[/green] Security diagram saved to {security_diagram_path}")
 
         # Run audit
         audit_report = None
@@ -197,7 +214,7 @@ def analyze(vpc_id, region, profile, output_dir, format, diagram_format, no_diag
     "--format",
     "-f",
     help="Diagram format",
-    type=click.Choice(["png", "svg"], case_sensitive=False),
+    type=click.Choice(["png", "svg", "ascii"], case_sensitive=False),
     default="png",
 )
 def diagram_only(vpc_id, region, profile, output_dir, format):
@@ -210,21 +227,35 @@ def diagram_only(vpc_id, region, profile, output_dir, format):
         topology = collector.collect_vpc_topology(vpc_id)
 
         console.print("[cyan]Generating diagrams...[/cyan]")
-        visualizer = VpcVisualizer(topology)
 
-        # Topology diagram
-        topology_path = visualizer.create_diagram(
-            output_file=str(output_dir / "vpc_topology"),
-            format=format,
-        )
-        console.print(f"[green]✓[/green] Topology diagram: {topology_path}")
+        if format == "ascii":
+            ascii_visualizer = AsciiVisualizer(topology)
 
-        # Security diagram
-        security_path = visualizer.create_security_diagram(
-            output_file=str(output_dir / "vpc_security"),
-            format=format,
-        )
-        console.print(f"[green]✓[/green] Security diagram: {security_path}")
+            # Full routing diagram
+            routing_path = str(output_dir / "vpc_routing.txt")
+            ascii_visualizer.save_routing_diagram(routing_path, compact=False)
+            console.print(f"[green]✓[/green] ASCII routing diagram: {routing_path}")
+
+            # Compact routing diagram
+            compact_path = str(output_dir / "vpc_routing_compact.txt")
+            ascii_visualizer.save_routing_diagram(compact_path, compact=True)
+            console.print(f"[green]✓[/green] Compact ASCII diagram: {compact_path}")
+        else:
+            visualizer = VpcVisualizer(topology)
+
+            # Topology diagram
+            topology_path = visualizer.create_diagram(
+                output_file=str(output_dir / "vpc_topology"),
+                format=format,
+            )
+            console.print(f"[green]✓[/green] Topology diagram: {topology_path}")
+
+            # Security diagram
+            security_path = visualizer.create_security_diagram(
+                output_file=str(output_dir / "vpc_security"),
+                format=format,
+            )
+            console.print(f"[green]✓[/green] Security diagram: {security_path}")
 
         console.print("\n[bold green]Diagrams generated![/bold green]")
 

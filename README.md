@@ -20,6 +20,7 @@ AWS VPC topology mapper and security auditor - a comprehensive CLI tool for visu
   - JSON for automation and integration
   - HTML reports with embedded diagrams
   - PNG/SVG diagrams for documentation
+  - ASCII art network diagrams showing routing topology
 
 - **Resource Discovery**: Automatically discovers and analyzes:
   - Subnets
@@ -95,7 +96,7 @@ vpc-map analyze vpc-12345678
 - `-p, --profile`: AWS profile (defaults to default profile)
 - `-o, --output-dir`: Output directory (default: `./vpc-map-output`)
 - `-f, --format`: Output format: `terminal`, `json`, `html`, `all` (default: `terminal`)
-- `--diagram-format`: Diagram format: `png`, `svg` (default: `png`)
+- `--diagram-format`: Diagram format: `png`, `svg`, `ascii` (default: `png`)
 - `--no-diagram`: Skip diagram generation
 - `--no-audit`: Skip security audit
 
@@ -110,6 +111,9 @@ vpc-map analyze vpc-12345678 --format all
 
 # Generate SVG diagrams instead of PNG
 vpc-map analyze vpc-12345678 --diagram-format svg
+
+# Generate ASCII art routing diagrams
+vpc-map analyze vpc-12345678 --diagram-format ascii
 
 # Custom output directory
 vpc-map analyze vpc-12345678 -o ./my-vpc-reports
@@ -131,11 +135,15 @@ vpc-map diagram-only vpc-12345678
 - `-r, --region`: AWS region
 - `-p, --profile`: AWS profile
 - `-o, --output-dir`: Output directory
-- `-f, --format`: Diagram format (`png` or `svg`)
+- `-f, --format`: Diagram format (`png`, `svg`, or `ascii`)
 
-**Example:**
+**Examples:**
 ```bash
+# Generate SVG diagrams
 vpc-map diagram-only vpc-12345678 --format svg -o ./diagrams
+
+# Generate ASCII art routing diagrams
+vpc-map diagram-only vpc-12345678 --format ascii -o ./diagrams
 ```
 
 ### Run Audit Only
@@ -194,6 +202,16 @@ Self-contained HTML file with:
 - Resource inventory tables
 - Detailed findings with recommendations
 - Professional styling and formatting
+
+### ASCII Art Diagrams
+
+Text-based network diagrams showing:
+- Complete VPC routing topology with all routes
+- Subnets organized by availability zone
+- Route tables with detailed routing information
+- Internet and NAT gateway connections
+- Routing flow visualization
+- Compact summary view option
 
 ## Security Audit Checks
 
