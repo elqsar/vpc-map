@@ -64,6 +64,7 @@ class TerminalReporter:
         summary_table.add_row("Route Tables", str(len(topology.route_tables)))
         summary_table.add_row("Security Groups", str(len(topology.security_groups)))
         summary_table.add_row("Network ACLs", str(len(topology.network_acls)))
+        summary_table.add_row("EC2 Instances", str(len(topology.ec2_instances)))
         summary_table.add_row("EBS Volumes", str(len(topology.ebs_volumes)))
 
         self.console.print(summary_table)
@@ -138,6 +139,53 @@ class TerminalReporter:
             )
 
         self.console.print(sg_table)
+
+        # EC2 Instances
+        if topology.ec2_instances:
+            ec2_table = Table(title="EC2 Instances", show_header=True)
+            ec2_table.add_column("Instance ID", style="cyan")
+            ec2_table.add_column("Name", style="yellow")
+            ec2_table.add_column("Type", style="blue")
+            ec2_table.add_column("State", style="magenta")
+            ec2_table.add_column("AZ", style="cyan")
+            ec2_table.add_column("Private IP", style="green")
+            ec2_table.add_column("Public IP", style="green")
+            ec2_table.add_column("Security Groups", style="blue")
+            ec2_table.add_column("Launched", style="yellow")
+
+            for instance in topology.ec2_instances:
+                instance_name = instance.get_tag("Name") or "-"
+
+                # Format state with color
+                state_style = "green" if instance.is_running else "red"
+                state_display = f"[{state_style}]{instance.state}[/{state_style}]"
+
+                # Format launch time
+                launch_time_str = "-"
+                if instance.launch_time:
+                    launch_time_str = instance.launch_time.strftime("%Y-%m-%d")
+
+                # Format security groups (show count and first name)
+                sg_display = "-"
+                if instance.security_group_names:
+                    if len(instance.security_group_names) == 1:
+                        sg_display = instance.security_group_names[0]
+                    else:
+                        sg_display = f"{instance.security_group_names[0]} (+{len(instance.security_group_names)-1})"
+
+                ec2_table.add_row(
+                    instance.instance_id,
+                    instance_name,
+                    instance.instance_type,
+                    state_display,
+                    instance.availability_zone,
+                    instance.private_ip_address or "-",
+                    instance.public_ip_address or "-",
+                    sg_display,
+                    launch_time_str,
+                )
+
+            self.console.print(ec2_table)
 
         # EBS Volumes
         if topology.ebs_volumes:

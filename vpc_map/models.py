@@ -144,6 +144,57 @@ class EbsVolume(BaseModel):
         return [att.get("InstanceId") for att in self.attachments if att.get("InstanceId")]
 
 
+class Ec2Instance(BaseModel):
+    """EC2 Instance resource model."""
+
+    instance_id: str
+    instance_type: str  # t2.micro, m5.large, etc.
+    state: str  # pending, running, stopping, stopped, shutting-down, terminated
+    subnet_id: str
+    vpc_id: str
+    availability_zone: str
+    private_ip_address: Optional[str] = None
+    public_ip_address: Optional[str] = None
+    private_dns_name: Optional[str] = None
+    public_dns_name: Optional[str] = None
+    security_groups: list[str] = Field(default_factory=list)  # List of security group IDs
+    security_group_names: list[str] = Field(default_factory=list)  # List of security group names
+    ami_id: str
+    launch_time: Optional[datetime] = None
+    platform: Optional[str] = None  # windows or None for Linux
+    architecture: Optional[str] = None  # i386, x86_64, arm64, x86_64_mac, arm64_mac
+    monitoring_state: str = "disabled"  # enabled or disabled
+    iam_instance_profile: Optional[str] = None  # IAM role ARN
+    ebs_optimized: bool = False
+    root_device_type: str = "ebs"  # ebs or instance-store
+    root_device_name: Optional[str] = None
+    instance_lifecycle: Optional[str] = None  # spot, scheduled, or None for normal
+    spot_instance_request_id: Optional[str] = None
+    tags: list[Tag] = Field(default_factory=list)
+
+    def get_tag(self, key: str) -> Optional[str]:
+        """Get tag value by key."""
+        for tag in self.tags:
+            if tag.key == key:
+                return tag.value
+        return None
+
+    @property
+    def is_running(self) -> bool:
+        """Check if instance is in running state."""
+        return self.state == "running"
+
+    @property
+    def is_spot(self) -> bool:
+        """Check if instance is a spot instance."""
+        return self.instance_lifecycle == "spot"
+
+    @property
+    def has_public_ip(self) -> bool:
+        """Check if instance has a public IP address."""
+        return self.public_ip_address is not None
+
+
 class Route(BaseModel):
     """Route in a route table."""
 
@@ -266,6 +317,7 @@ class VpcTopology(BaseModel):
     route_tables: list[RouteTable] = Field(default_factory=list)
     security_groups: list[SecurityGroup] = Field(default_factory=list)
     network_acls: list[NetworkAcl] = Field(default_factory=list)
+    ec2_instances: list[Ec2Instance] = Field(default_factory=list)
     ebs_volumes: list[EbsVolume] = Field(default_factory=list)
     region: str
     collected_at: datetime = Field(default_factory=datetime.now)

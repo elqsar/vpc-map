@@ -76,6 +76,19 @@ class JSONReporter:
                         [sg for sg in topology.security_groups if not sg.is_in_use]
                     ),
                     "network_acls": len(topology.network_acls),
+                    "ec2_instances": len(topology.ec2_instances),
+                    "ec2_instances_running": len(
+                        [i for i in topology.ec2_instances if i.is_running]
+                    ),
+                    "ec2_instances_stopped": len(
+                        [i for i in topology.ec2_instances if i.state == "stopped"]
+                    ),
+                    "ec2_instances_with_public_ip": len(
+                        [i for i in topology.ec2_instances if i.has_public_ip]
+                    ),
+                    "ec2_spot_instances": len(
+                        [i for i in topology.ec2_instances if i.is_spot]
+                    ),
                     "ebs_volumes": len(topology.ebs_volumes),
                     "ebs_volumes_encrypted": len(
                         [vol for vol in topology.ebs_volumes if vol.encrypted]

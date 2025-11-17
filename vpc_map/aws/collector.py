@@ -7,6 +7,7 @@ from botocore.exceptions import ClientError
 
 from vpc_map.models import (
     EbsVolume,
+    Ec2Instance,
     InternetGateway,
     IpPermission,
     NatGateway,
@@ -372,6 +373,75 @@ class VpcCollector:
                 e.response["Error"]["Code"],
             )
 
+    def get_ec2_instances(self, vpc_id: str) -> list[Ec2Instance]:
+        """
+        Get all EC2 instances in a VPC.
+
+        Args:
+            vpc_id: VPC ID to check
+
+        Returns:
+            List of EC2 instances
+        """
+        try:
+            response = self.ec2_client.describe_instances(
+                Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]
+            )
+
+            ec2_instances = []
+            for reservation in response.get("Reservations", []):
+                for instance_data in reservation.get("Instances", []):
+                    # Extract security group IDs and names
+                    security_groups = []
+                    security_group_names = []
+                    for sg in instance_data.get("SecurityGroups", []):
+                        security_groups.append(sg["GroupId"])
+                        security_group_names.append(sg["GroupName"])
+
+                    # Extract IAM instance profile ARN
+                    iam_profile = None
+                    if "IamInstanceProfile" in instance_data:
+                        iam_profile = instance_data["IamInstanceProfile"].get("Arn")
+
+                    # Extract monitoring state
+                    monitoring_state = instance_data.get("Monitoring", {}).get("State", "disabled")
+
+                    ec2_instances.append(
+                        Ec2Instance(
+                            instance_id=instance_data["InstanceId"],
+                            instance_type=instance_data["InstanceType"],
+                            state=instance_data["State"]["Name"],
+                            subnet_id=instance_data.get("SubnetId", ""),
+                            vpc_id=instance_data["VpcId"],
+                            availability_zone=instance_data["Placement"]["AvailabilityZone"],
+                            private_ip_address=instance_data.get("PrivateIpAddress"),
+                            public_ip_address=instance_data.get("PublicIpAddress"),
+                            private_dns_name=instance_data.get("PrivateDnsName"),
+                            public_dns_name=instance_data.get("PublicDnsName"),
+                            security_groups=security_groups,
+                            security_group_names=security_group_names,
+                            ami_id=instance_data["ImageId"],
+                            launch_time=instance_data.get("LaunchTime"),
+                            platform=instance_data.get("Platform"),
+                            architecture=instance_data.get("Architecture"),
+                            monitoring_state=monitoring_state,
+                            iam_instance_profile=iam_profile,
+                            ebs_optimized=instance_data.get("EbsOptimized", False),
+                            root_device_type=instance_data.get("RootDeviceType", "ebs"),
+                            root_device_name=instance_data.get("RootDeviceName"),
+                            instance_lifecycle=instance_data.get("InstanceLifecycle"),
+                            spot_instance_request_id=instance_data.get("SpotInstanceRequestId"),
+                            tags=self._parse_tags(instance_data.get("Tags")),
+                        )
+                    )
+
+            return ec2_instances
+        except ClientError as e:
+            raise ClientError(
+                f"Failed to get EC2 instances: {e.response['Error']['Message']}",
+                e.response["Error"]["Code"],
+            )
+
     def get_ebs_volumes(self, vpc_id: str) -> list[EbsVolume]:
         """
         Get all EBS volumes attached to instances in a VPC.
@@ -453,6 +523,7 @@ class VpcCollector:
             route_tables = self.get_route_tables(vpc_id)
             security_groups = self.get_security_groups(vpc_id)
             network_acls = self.get_network_acls(vpc_id)
+            ec2_instances = self.get_ec2_instances(vpc_id)
             ebs_volumes = self.get_ebs_volumes(vpc_id)
 
             # Get security group usage information
@@ -475,6 +546,7 @@ class VpcCollector:
                 route_tables=route_tables,
                 security_groups=security_groups,
                 network_acls=network_acls,
+                ec2_instances=ec2_instances,
                 ebs_volumes=ebs_volumes,
                 region=self.region,
             )
