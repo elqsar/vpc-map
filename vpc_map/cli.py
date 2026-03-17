@@ -7,6 +7,7 @@ from rich.console import Console
 
 from vpc_map.audit.engine import AuditEngine
 from vpc_map.aws.collector import VpcCollector
+from vpc_map.diff import diff_topologies, load_topology_from_file
 from vpc_map.reports.html import HTMLReporter
 from vpc_map.reports.json import JSONReporter
 from vpc_map.reports.terminal import TerminalReporter
@@ -323,6 +324,110 @@ def audit_only(vpc_id, region, profile, output_dir, format):
             console.print(f"[green]✓[/green] HTML report: {html_output}")
 
         console.print("\n[bold green]Audit complete![/bold green]")
+
+    except Exception as e:
+        console.print(f"[red]Error: {str(e)}[/red]")
+        raise click.Abort()
+
+
+@main.command()
+@click.argument("before_file", type=click.Path(exists=True, path_type=Path))
+@click.argument("after_file", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--format",
+    "-f",
+    "fmt",
+    help="Output format for diff report",
+    type=click.Choice(["terminal", "json", "html", "all"], case_sensitive=False),
+    default="terminal",
+)
+@click.option(
+    "--output-dir",
+    "-o",
+    help="Output directory for reports",
+    default="./vpc-map-output",
+    type=click.Path(path_type=Path),
+)
+def diff(before_file, after_file, fmt, output_dir):
+    """Compare two VPC topology snapshots and report changes."""
+    try:
+        console.print("[cyan]Loading snapshots...[/cyan]")
+        before = load_topology_from_file(before_file)
+        after = load_topology_from_file(after_file)
+
+        if before.vpc.vpc_id != after.vpc.vpc_id:
+            console.print(
+                f"[yellow]Warning: VPC IDs differ ({before.vpc.vpc_id} vs {after.vpc.vpc_id})[/yellow]"
+            )
+
+        console.print("[cyan]Computing diff...[/cyan]")
+        diff_report = diff_topologies(before, after)
+
+        if fmt == "terminal" or fmt == "all":
+            console.print()
+            reporter = TerminalReporter()
+            reporter.print_diff_report(diff_report)
+
+        if fmt == "json" or fmt == "all":
+            output_dir.mkdir(parents=True, exist_ok=True)
+            json_output = output_dir / "vpc_diff.json"
+            JSONReporter().generate_diff_report(diff_report, json_output)
+            console.print(f"[green]✓[/green] JSON diff report saved to {json_output}")
+
+        if fmt == "html" or fmt == "all":
+            output_dir.mkdir(parents=True, exist_ok=True)
+            html_output = output_dir / "vpc_diff.html"
+            HTMLReporter().generate_diff_report(diff_report, html_output)
+            console.print(f"[green]✓[/green] HTML diff report saved to {html_output}")
+
+        console.print("\n[bold green]Diff complete![/bold green]")
+
+    except Exception as e:
+        console.print(f"[red]Error: {str(e)}[/red]")
+        raise click.Abort()
+
+
+@main.group()
+def baseline():
+    """Manage VPC topology baselines."""
+    pass
+
+
+@baseline.command("create")
+@click.argument("vpc_id")
+@click.option(
+    "--region",
+    "-r",
+    help="AWS region to use",
+    default=None,
+)
+@click.option(
+    "--profile",
+    "-p",
+    help="AWS profile to use",
+    default=None,
+)
+@click.option(
+    "--output-file",
+    "-o",
+    help="Output file path for baseline",
+    default=None,
+    type=click.Path(path_type=Path),
+)
+def baseline_create(vpc_id, region, profile, output_file):
+    """Create a baseline snapshot of a VPC topology."""
+    try:
+        console.print(f"[cyan]Collecting VPC topology for {vpc_id}...[/cyan]")
+        collector = VpcCollector(region=region, profile=profile)
+        topology = collector.collect_vpc_topology(vpc_id)
+        console.print("[green]✓[/green] Topology collected")
+
+        if output_file is None:
+            output_file = Path(f"vpc-map-baseline-{vpc_id}.json")
+
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        JSONReporter().generate_topology_report(topology, output_file)
+        console.print(f"[green]✓[/green] Baseline saved to {output_file}")
 
     except Exception as e:
         console.print(f"[red]Error: {str(e)}[/red]")

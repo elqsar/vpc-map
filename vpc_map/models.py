@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -25,6 +25,23 @@ class AuditCategory(str, Enum):
     RELIABILITY = "reliability"
     PERFORMANCE = "performance"
     OPERATIONS = "operations"
+
+
+class SubnetClassification(str, Enum):
+    """Derived subnet connectivity classifications."""
+
+    PUBLIC = "public"
+    PRIVATE_WITH_NAT = "private_with_nat"
+    ISOLATED = "isolated"
+    ENDPOINT_ONLY = "endpoint_only"
+
+
+class ExposureState(str, Enum):
+    """Derived external exposure states."""
+
+    PUBLICLY_REACHABLE = "publicly_reachable"
+    POTENTIALLY_REACHABLE = "potentially_reachable"
+    PRIVATELY_REACHABLE_ONLY = "privately_reachable_only"
 
 
 class Tag(BaseModel):
@@ -106,6 +123,78 @@ class NatGateway(BaseModel):
             if tag.key == key:
                 return tag.value
         return None
+
+
+class FlowLog(BaseModel):
+    """VPC Flow Log resource model."""
+
+    flow_log_id: str
+    resource_id: str
+    resource_type: str
+    traffic_type: str
+    log_destination_type: Optional[str] = None
+    log_destination: Optional[str] = None
+    deliver_logs_status: Optional[str] = None
+    flow_log_status: Optional[str] = None
+    log_format: Optional[str] = None
+    tags: list[Tag] = Field(default_factory=list)
+
+    def get_tag(self, key: str) -> Optional[str]:
+        """Get tag value by key."""
+        for tag in self.tags:
+            if tag.key == key:
+                return tag.value
+        return None
+
+
+class VpcEndpoint(BaseModel):
+    """VPC Endpoint resource model."""
+
+    vpc_endpoint_id: str
+    vpc_id: str
+    service_name: str
+    endpoint_type: str
+    state: str
+    private_dns_enabled: bool = False
+    subnet_ids: list[str] = Field(default_factory=list)
+    route_table_ids: list[str] = Field(default_factory=list)
+    security_group_ids: list[str] = Field(default_factory=list)
+    network_interface_ids: list[str] = Field(default_factory=list)
+    policy_document: Optional[str] = None
+    tags: list[Tag] = Field(default_factory=list)
+
+    def get_tag(self, key: str) -> Optional[str]:
+        """Get tag value by key."""
+        for tag in self.tags:
+            if tag.key == key:
+                return tag.value
+        return None
+
+
+class ElasticIp(BaseModel):
+    """Elastic IP resource model."""
+
+    allocation_id: Optional[str] = None
+    association_id: Optional[str] = None
+    public_ip: str
+    private_ip_address: Optional[str] = None
+    instance_id: Optional[str] = None
+    network_interface_id: Optional[str] = None
+    network_interface_owner_id: Optional[str] = None
+    domain: Optional[str] = None
+    tags: list[Tag] = Field(default_factory=list)
+
+    def get_tag(self, key: str) -> Optional[str]:
+        """Get tag value by key."""
+        for tag in self.tags:
+            if tag.key == key:
+                return tag.value
+        return None
+
+    @property
+    def is_associated(self) -> bool:
+        """Check if the Elastic IP is currently associated."""
+        return bool(self.association_id or self.instance_id or self.network_interface_id)
 
 
 class EbsVolume(BaseModel):
@@ -202,6 +291,12 @@ class Route(BaseModel):
     destination_ipv6_cidr_block: Optional[str] = None
     gateway_id: Optional[str] = None
     nat_gateway_id: Optional[str] = None
+    vpc_endpoint_id: Optional[str] = None
+    transit_gateway_id: Optional[str] = None
+    egress_only_internet_gateway_id: Optional[str] = None
+    vpn_gateway_id: Optional[str] = None
+    carrier_gateway_id: Optional[str] = None
+    local_gateway_id: Optional[str] = None
     network_interface_id: Optional[str] = None
     vpc_peering_connection_id: Optional[str] = None
     instance_id: Optional[str] = None
@@ -314,6 +409,9 @@ class VpcTopology(BaseModel):
     subnets: list[Subnet] = Field(default_factory=list)
     internet_gateways: list[InternetGateway] = Field(default_factory=list)
     nat_gateways: list[NatGateway] = Field(default_factory=list)
+    flow_logs: list[FlowLog] = Field(default_factory=list)
+    vpc_endpoints: list[VpcEndpoint] = Field(default_factory=list)
+    elastic_ips: list[ElasticIp] = Field(default_factory=list)
     route_tables: list[RouteTable] = Field(default_factory=list)
     security_groups: list[SecurityGroup] = Field(default_factory=list)
     network_acls: list[NetworkAcl] = Field(default_factory=list)
@@ -321,6 +419,35 @@ class VpcTopology(BaseModel):
     ebs_volumes: list[EbsVolume] = Field(default_factory=list)
     region: str
     collected_at: datetime = Field(default_factory=datetime.now)
+
+
+class SubnetAnalysis(BaseModel):
+    """Derived network analysis for a subnet."""
+
+    subnet_id: str
+    route_table_id: Optional[str] = None
+    classification: SubnetClassification
+    has_internet_gateway_route: bool = False
+    has_nat_route: bool = False
+    has_endpoint_access: bool = False
+
+
+class InstanceExposure(BaseModel):
+    """Derived network exposure analysis for an EC2 instance."""
+
+    instance_id: str
+    subnet_id: str
+    subnet_classification: SubnetClassification
+    public_address_source: Optional[str] = None
+    has_public_address: bool = False
+    internet_route: bool = False
+    security_group_exposure: bool = False
+    nacl_exposure: bool = False
+    exposure_state: ExposureState
+    allowed_ports: list[int] = Field(default_factory=list)
+    open_admin_ports: list[int] = Field(default_factory=list)
+    blocked_ports: list[int] = Field(default_factory=list)
+    explanations: list[str] = Field(default_factory=list)
 
 
 class AuditReport(BaseModel):
@@ -353,3 +480,50 @@ class AuditReport(BaseModel):
     def get_findings_by_category(self, category: AuditCategory) -> list[AuditFinding]:
         """Get findings filtered by category."""
         return [f for f in self.findings if f.category == category]
+
+
+class ChangeType(str, Enum):
+    """Types of resource changes between snapshots."""
+
+    ADDED = "added"
+    REMOVED = "removed"
+    MODIFIED = "modified"
+
+
+class FieldChange(BaseModel):
+    """A single field-level change within a resource."""
+
+    field: str
+    old_value: Any = None
+    new_value: Any = None
+
+
+class ResourceChange(BaseModel):
+    """A change to a specific resource between snapshots."""
+
+    resource_type: str
+    resource_id: str
+    change_type: ChangeType
+    field_changes: list[FieldChange] = Field(default_factory=list)
+
+
+class DerivedChange(BaseModel):
+    """A change in derived analysis (subnet classification or instance exposure)."""
+
+    analysis_type: str
+    resource_id: str
+    field: str
+    old_value: Any = None
+    new_value: Any = None
+
+
+class DiffReport(BaseModel):
+    """Complete diff report comparing two topology snapshots."""
+
+    vpc_id: str
+    region: str
+    before_collected_at: datetime
+    after_collected_at: datetime
+    resource_changes: list[ResourceChange] = Field(default_factory=list)
+    derived_changes: list[DerivedChange] = Field(default_factory=list)
+    generated_at: datetime = Field(default_factory=datetime.now)

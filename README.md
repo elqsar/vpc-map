@@ -22,6 +22,17 @@ AWS VPC topology mapper and security auditor - a comprehensive CLI tool for visu
   - PNG/SVG diagrams for documentation
   - ASCII art network diagrams showing routing topology
 
+- **Network Analysis**: Derived connectivity and exposure analysis:
+  - Subnet classification (public, private with NAT, endpoint-only, isolated)
+  - Instance exposure detection (publicly reachable, potentially reachable, private only)
+  - Security group and NACL port analysis
+
+- **Snapshot Diff & Drift Detection**: Compare two topology snapshots to detect infrastructure changes:
+  - Resource additions, removals, and modifications across all resource types
+  - Derived analysis drift (subnet classification changes, instance exposure changes)
+  - Output in terminal, JSON, or HTML formats
+  - Baseline snapshot management
+
 - **Resource Discovery**: Automatically discovers and analyzes:
   - Subnets
   - NAT Gateways
@@ -29,6 +40,11 @@ AWS VPC topology mapper and security auditor - a comprehensive CLI tool for visu
   - Route Tables
   - Security Groups
   - Network ACLs
+  - Flow Logs
+  - VPC Endpoints
+  - Elastic IPs
+  - EC2 Instances
+  - EBS Volumes
 
 ## Installation
 
@@ -163,6 +179,55 @@ vpc-map audit-only vpc-12345678
 vpc-map audit-only vpc-12345678 --format json
 ```
 
+### Compare Topology Snapshots (Diff)
+
+Compare two previously saved topology JSON snapshots to detect drift:
+
+```bash
+vpc-map diff before.json after.json
+```
+
+**Options:**
+- `-f, --format`: Output format: `terminal`, `json`, `html`, `all` (default: `terminal`)
+- `-o, --output-dir`: Output directory for JSON/HTML reports (default: `./vpc-map-output`)
+
+**Examples:**
+```bash
+# Terminal diff
+vpc-map diff baseline.json current.json
+
+# Generate JSON diff report
+vpc-map diff baseline.json current.json -f json -o ./diff-reports
+
+# Generate all output formats
+vpc-map diff baseline.json current.json -f all
+```
+
+### Create a Baseline Snapshot
+
+Capture the current VPC topology as a baseline for future comparisons:
+
+```bash
+vpc-map baseline create vpc-12345678
+```
+
+**Options:**
+- `-r, --region`: AWS region
+- `-p, --profile`: AWS profile
+- `-o, --output-file`: Output file path (default: `vpc-map-baseline-<vpc_id>.json`)
+
+**Examples:**
+```bash
+# Create baseline with default filename
+vpc-map baseline create vpc-12345678
+
+# Create baseline with custom path
+vpc-map baseline create vpc-12345678 -o ./baselines/prod-vpc.json
+
+# Create baseline for a specific region/profile
+vpc-map baseline create vpc-12345678 -r eu-west-1 -p prod
+```
+
 ## Output Examples
 
 ### Terminal Output
@@ -262,7 +327,13 @@ The tool requires read-only permissions for:
         "ec2:DescribeRouteTables",
         "ec2:DescribeSecurityGroups",
         "ec2:DescribeNetworkAcls",
-        "ec2:DescribeVpcAttribute"
+        "ec2:DescribeVpcAttribute",
+        "ec2:DescribeFlowLogs",
+        "ec2:DescribeVpcEndpoints",
+        "ec2:DescribeAddresses",
+        "ec2:DescribeInstances",
+        "ec2:DescribeVolumes",
+        "ec2:DescribeNetworkInterfaces"
       ],
       "Resource": "*"
     }
@@ -299,14 +370,20 @@ uv run ruff check vpc_map/
 
 ```
 vpc-map/
-├── src/vpc_map/
+├── vpc_map/
 │   ├── __init__.py
 │   ├── cli.py              # CLI commands
 │   ├── models.py           # Data models
 │   ├── aws/
 │   │   └── collector.py    # AWS resource collection
+│   ├── network/
+│   │   └── analysis.py     # Shared derived network analysis
+│   ├── diff/
+│   │   ├── engine.py       # Snapshot diff algorithm
+│   │   └── loader.py       # JSON snapshot loader
 │   ├── visualization/
-│   │   └── graphviz.py     # Diagram generation
+│   │   ├── graphviz.py     # Graphviz diagram generation
+│   │   └── ascii.py        # ASCII art routing diagrams
 │   ├── audit/
 │   │   ├── engine.py       # Audit orchestration
 │   │   ├── aws_waf.py      # AWS Well-Architected rules

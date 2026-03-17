@@ -5,6 +5,11 @@ from pathlib import Path
 import graphviz
 
 from vpc_map.models import VpcTopology
+from vpc_map.network.analysis import (
+    analyze_subnets,
+    get_route_destination,
+    get_route_target_kind,
+)
 
 
 class VpcVisualizer:
@@ -15,8 +20,11 @@ class VpcVisualizer:
         "vpc": "#E8F4F8",
         "subnet_public": "#B8E6B8",
         "subnet_private": "#FFE6B8",
+        "subnet_endpoint_only": "#CFE8F6",
+        "subnet_isolated": "#E6E6E6",
         "igw": "#FFB6C1",
         "nat": "#DDA0DD",
+        "endpoint": "#C7E9C0",
         "route_table": "#F0E68C",
         "security_group": "#87CEEB",
         "nacl": "#FFA07A",
@@ -30,16 +38,13 @@ class VpcVisualizer:
             topology: VPC topology to visualize
         """
         self.topology = topology
+        self.subnet_analysis = {
+            analysis.subnet_id: analysis for analysis in analyze_subnets(topology)
+        }
 
     def _get_subnet_type(self, subnet_id: str) -> str:
-        """Determine if subnet is public or private based on route tables."""
-        for rt in self.topology.route_tables:
-            if subnet_id in rt.subnet_associations:
-                # Check if route table has a route to an internet gateway
-                for route in rt.routes:
-                    if route.gateway_id and route.gateway_id.startswith("igw-"):
-                        return "public"
-        return "private"
+        """Get the shared subnet classification label."""
+        return self.subnet_analysis[subnet_id].classification.value
 
     def _format_cidr(self, cidr: str) -> str:
         """Format CIDR block for display."""
@@ -51,6 +56,60 @@ class VpcVisualizer:
             prefix, suffix = resource_id.split("-", 1)
             return f"{prefix}-{suffix[:8]}..."
         return resource_id
+
+    def _endpoint_label(self, endpoint) -> str:
+        """Format a compact label for a VPC endpoint."""
+        service_name = endpoint.service_name.split(".")[-1]
+        return (
+            f"VPC Endpoint\\n"
+            f"{service_name}\\n"
+            f"{endpoint.endpoint_type}\\n"
+            f"{endpoint.state}"
+        )
+
+    def _add_route_target_node(self, dot: graphviz.Digraph, target_kind: str, target_id: str) -> None:
+        """Add a labeled node for expanded route targets not otherwise rendered."""
+        labels = {
+            "tgw": "Transit Gateway",
+            "vgw": "VPN Gateway",
+            "eigw": "Egress-Only IGW",
+            "pcx": "VPC Peering",
+            "eni": "ENI",
+            "instance": "Instance",
+            "carrier_gw": "Carrier Gateway",
+            "local_gw": "Local Gateway",
+        }
+        shapes = {
+            "tgw": "octagon",
+            "vgw": "octagon",
+            "eigw": "box",
+            "pcx": "hexagon",
+            "eni": "ellipse",
+            "instance": "ellipse",
+            "carrier_gw": "hexagon",
+            "local_gw": "hexagon",
+        }
+        colors = {
+            "tgw": "#E7D7F7",
+            "vgw": "#F7DFC6",
+            "eigw": "#DCEBFA",
+            "pcx": "#FBE6B8",
+            "eni": "#EFEFEF",
+            "instance": "#EFEFEF",
+            "carrier_gw": "#F7E2C6",
+            "local_gw": "#D9DEF8",
+        }
+        if target_kind not in labels:
+            return
+
+        dot.node(
+            target_id,
+            label=f"{labels[target_kind]}\\n{target_id}",
+            shape=shapes[target_kind],
+            style="filled,rounded",
+            fillcolor=colors[target_kind],
+            fontsize="9",
+        )
 
     def create_diagram(self, output_file: str = "vpc_topology", format: str = "png") -> Path:
         """
@@ -92,11 +151,12 @@ class VpcVisualizer:
             for subnet in self.topology.subnets:
                 subnet_type = self._get_subnet_type(subnet.subnet_id)
                 subnet_name = subnet.get_tag("Name") or subnet.subnet_id
-                color = (
-                    self.COLORS["subnet_public"]
-                    if subnet_type == "public"
-                    else self.COLORS["subnet_private"]
-                )
+                color = {
+                    "public": self.COLORS["subnet_public"],
+                    "private_with_nat": self.COLORS["subnet_private"],
+                    "endpoint_only": self.COLORS["subnet_endpoint_only"],
+                    "isolated": self.COLORS["subnet_isolated"],
+                }.get(subnet_type, self.COLORS["subnet_private"])
 
                 label = (
                     f"{subnet_name}\\n"
@@ -136,6 +196,42 @@ class VpcVisualizer:
                             style="dashed",
                             color="gray",
                         )
+
+                # Add interface endpoints in subnets
+                for endpoint in self.topology.vpc_endpoints:
+                    if endpoint.endpoint_type.lower() != "interface":
+                        continue
+                    if subnet.subnet_id not in endpoint.subnet_ids:
+                        continue
+
+                    vpc_cluster.node(
+                        endpoint.vpc_endpoint_id,
+                        label=self._endpoint_label(endpoint),
+                        shape="hexagon",
+                        style="filled,rounded",
+                        fillcolor=self.COLORS["endpoint"],
+                        fontsize="10",
+                    )
+                    vpc_cluster.edge(
+                        subnet.subnet_id,
+                        endpoint.vpc_endpoint_id,
+                        style="dashed",
+                        color="darkgreen",
+                    )
+
+            # Add gateway endpoints once at VPC scope
+            for endpoint in self.topology.vpc_endpoints:
+                if endpoint.endpoint_type.lower() != "gateway":
+                    continue
+
+                vpc_cluster.node(
+                    endpoint.vpc_endpoint_id,
+                    label=self._endpoint_label(endpoint),
+                    shape="hexagon",
+                    style="filled,rounded",
+                    fillcolor=self.COLORS["endpoint"],
+                    fontsize="10",
+                )
 
         # Add Internet Gateways (outside VPC cluster)
         for igw in self.topology.internet_gateways:
@@ -200,24 +296,57 @@ class VpcVisualizer:
 
             # Show routes to NAT gateways and IGWs
             for route in rt.routes:
-                if route.nat_gateway_id:
+                target_kind = get_route_target_kind(route)
+                target_id = (
+                    route.nat_gateway_id
+                    or route.gateway_id
+                    or route.vpc_endpoint_id
+                    or route.transit_gateway_id
+                    or route.egress_only_internet_gateway_id
+                    or route.vpn_gateway_id
+                    or route.carrier_gateway_id
+                    or route.local_gateway_id
+                    or route.vpc_peering_connection_id
+                    or route.network_interface_id
+                    or route.instance_id
+                )
+                edge_color = {
+                    "nat": "purple",
+                    "igw": "green",
+                    "vpce": "darkgreen",
+                    "tgw": "brown",
+                    "vgw": "sienna",
+                    "eigw": "darkblue",
+                    "pcx": "darkorange",
+                    "eni": "gray40",
+                    "instance": "gray40",
+                    "carrier_gw": "goldenrod4",
+                    "local_gw": "slateblue4",
+                }.get(target_kind)
+
+                if edge_color and target_id:
+                    self._add_route_target_node(dot, target_kind, target_id)
                     dot.edge(
                         rt.route_table_id,
-                        route.nat_gateway_id,
-                        label=f"→ {route.destination_cidr_block or 'default'}",
+                        target_id,
+                        label=f"→ {get_route_destination(route)}",
                         style="dashed",
-                        color="purple",
+                        color=edge_color,
                         fontsize="8",
                     )
-                elif route.gateway_id and route.gateway_id.startswith("igw-"):
-                    dot.edge(
-                        rt.route_table_id,
-                        route.gateway_id,
-                        label=f"→ {route.destination_cidr_block or 'default'}",
-                        style="dashed",
-                        color="green",
-                        fontsize="8",
-                    )
+
+        for endpoint in self.topology.vpc_endpoints:
+            if endpoint.endpoint_type.lower() != "gateway":
+                continue
+            for route_table_id in endpoint.route_table_ids:
+                dot.edge(
+                    route_table_id,
+                    endpoint.vpc_endpoint_id,
+                    label="endpoint",
+                    style="dotted",
+                    color="darkgreen",
+                    fontsize="8",
+                )
 
         # Add legend
         with dot.subgraph(name="cluster_legend") as legend:
@@ -236,10 +365,24 @@ class VpcVisualizer:
             )
             legend.node(
                 "legend_private",
-                label="Private Subnet",
+                label="Private With NAT",
                 shape="box",
                 style="filled,rounded",
                 fillcolor=self.COLORS["subnet_private"],
+            )
+            legend.node(
+                "legend_endpoint_only",
+                label="Endpoint-Only Subnet",
+                shape="box",
+                style="filled,rounded",
+                fillcolor=self.COLORS["subnet_endpoint_only"],
+            )
+            legend.node(
+                "legend_isolated",
+                label="Isolated Subnet",
+                shape="box",
+                style="filled,rounded",
+                fillcolor=self.COLORS["subnet_isolated"],
             )
             legend.node(
                 "legend_nat",
@@ -247,6 +390,13 @@ class VpcVisualizer:
                 shape="diamond",
                 style="filled",
                 fillcolor=self.COLORS["nat"],
+            )
+            legend.node(
+                "legend_endpoint",
+                label="VPC Endpoint",
+                shape="hexagon",
+                style="filled,rounded",
+                fillcolor=self.COLORS["endpoint"],
             )
             legend.node(
                 "legend_igw",

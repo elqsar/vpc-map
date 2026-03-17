@@ -1,8 +1,15 @@
 """ASCII art network diagrams showing VPC routing topology."""
 
-from typing import Dict, List, Set
+from typing import Dict, List
 
 from vpc_map.models import VpcTopology
+from vpc_map.network.analysis import (
+    analyze_subnets,
+    format_route_target,
+    get_route_destination,
+    get_route_table_for_subnet,
+    get_route_target_kind,
+)
 
 
 class AsciiVisualizer:
@@ -16,27 +23,18 @@ class AsciiVisualizer:
             topology: VPC topology to visualize
         """
         self.topology = topology
+        self.subnet_analysis = {
+            analysis.subnet_id: analysis for analysis in analyze_subnets(topology)
+        }
 
     def _get_subnet_type(self, subnet_id: str) -> str:
-        """Determine if subnet is public or private based on route tables."""
-        for rt in self.topology.route_tables:
-            if subnet_id in rt.subnet_associations:
-                # Check if route table has a route to an internet gateway
-                for route in rt.routes:
-                    if route.gateway_id and route.gateway_id.startswith("igw-"):
-                        return "PUBLIC"
-        return "PRIVATE"
+        """Get the shared subnet classification label."""
+        return self.subnet_analysis[subnet_id].classification.value.upper()
 
     def _get_route_table_for_subnet(self, subnet_id: str) -> str:
         """Get the route table ID associated with a subnet."""
-        for rt in self.topology.route_tables:
-            if subnet_id in rt.subnet_associations:
-                return rt.route_table_id
-        # Return main route table if no explicit association
-        for rt in self.topology.route_tables:
-            if rt.is_main:
-                return rt.route_table_id
-        return "N/A"
+        route_table = get_route_table_for_subnet(self.topology, subnet_id)
+        return route_table.route_table_id if route_table else "N/A"
 
     def _format_box(self, content: str, width: int = 70, title: str = "") -> str:
         """Create a box around content with optional title."""
@@ -112,7 +110,7 @@ class AsciiVisualizer:
                 output.append("                           │")
                 output.append("                           ▼")
                 output.append("                    ┌──────────────────────┐")
-                output.append(f"                    │ Internet Gateway     │")
+                output.append("                    │ Internet Gateway     │")
                 output.append(f"                    │ {igw_name:<20} │")
                 output.append(f"                    │ {igw.igw_id:<20} │")
                 output.append("                    └──────────────────────┘")
@@ -160,6 +158,19 @@ class AsciiVisualizer:
                         output.append(f"│     │  Public IP: {nat.public_ip or 'N/A'}")
                         output.append(f"│     │  Private IP: {nat.private_ip or 'N/A'}")
 
+                interface_endpoints = [
+                    endpoint
+                    for endpoint in self.topology.vpc_endpoints
+                    if endpoint.endpoint_type.lower() == "interface"
+                    and subnet.subnet_id in endpoint.subnet_ids
+                ]
+                if interface_endpoints:
+                    for endpoint in interface_endpoints:
+                        output.append("│")
+                        output.append(f"│     ├─ Interface Endpoint: {endpoint.service_name}")
+                        output.append(f"│     │  ID: {endpoint.vpc_endpoint_id}")
+                        output.append(f"│     │  State: {endpoint.state}")
+
                 output.append("│")
 
             output.append("└" + "─" * 78 + "┘")
@@ -202,28 +213,8 @@ class AsciiVisualizer:
             output.append("│ " + "─" * 76 + " │")
 
             for route in rt.routes:
-                dest = route.destination_cidr_block or route.destination_ipv6_cidr_block or "N/A"
-                target = "local"
-
-                if route.gateway_id:
-                    if route.gateway_id.startswith("igw-"):
-                        # Get IGW name
-                        igw = next((i for i in self.topology.internet_gateways if i.igw_id == route.gateway_id), None)
-                        igw_name = igw.get_tag("Name") if igw else None
-                        target = f"IGW ({igw_name or route.gateway_id})"
-                    else:
-                        target = route.gateway_id
-                elif route.nat_gateway_id:
-                    # Get NAT name
-                    nat = next((n for n in self.topology.nat_gateways if n.nat_gateway_id == route.nat_gateway_id), None)
-                    nat_name = nat.get_tag("Name") if nat else None
-                    target = f"NAT ({nat_name or route.nat_gateway_id})"
-                elif route.vpc_peering_connection_id:
-                    target = f"PCX ({route.vpc_peering_connection_id})"
-                elif route.network_interface_id:
-                    target = f"ENI ({route.network_interface_id})"
-                elif route.instance_id:
-                    target = f"Instance ({route.instance_id})"
+                dest = get_route_destination(route)
+                target = format_route_target(route)
 
                 # Format route entry
                 dest_str = f"{dest:<20}"
@@ -242,8 +233,26 @@ class AsciiVisualizer:
         output.append("")
 
         # Find public and private subnets
-        public_subnets = [s for s in self.topology.subnets if self._get_subnet_type(s.subnet_id) == "PUBLIC"]
-        private_subnets = [s for s in self.topology.subnets if self._get_subnet_type(s.subnet_id) == "PRIVATE"]
+        public_subnets = [
+            subnet
+            for subnet in self.topology.subnets
+            if self._get_subnet_type(subnet.subnet_id) == "PUBLIC"
+        ]
+        private_subnets = [
+            subnet
+            for subnet in self.topology.subnets
+            if self._get_subnet_type(subnet.subnet_id) == "PRIVATE_WITH_NAT"
+        ]
+        endpoint_only_subnets = [
+            subnet
+            for subnet in self.topology.subnets
+            if self._get_subnet_type(subnet.subnet_id) == "ENDPOINT_ONLY"
+        ]
+        isolated_subnets = [
+            subnet
+            for subnet in self.topology.subnets
+            if self._get_subnet_type(subnet.subnet_id) == "ISOLATED"
+        ]
 
         if public_subnets and self.topology.internet_gateways:
             output.append("PUBLIC SUBNET INTERNET ACCESS:")
@@ -285,7 +294,9 @@ class AsciiVisualizer:
         output.append("=" * 80)
         output.append(f"Total Subnets: {len(self.topology.subnets)}")
         output.append(f"  Public: {len(public_subnets)}")
-        output.append(f"  Private: {len(private_subnets)}")
+        output.append(f"  Private With NAT: {len(private_subnets)}")
+        output.append(f"  Endpoint Only: {len(endpoint_only_subnets)}")
+        output.append(f"  Isolated: {len(isolated_subnets)}")
         output.append(f"Internet Gateways: {len(self.topology.internet_gateways)}")
         output.append(f"NAT Gateways: {len(self.topology.nat_gateways)}")
         output.append(f"Route Tables: {len(self.topology.route_tables)}")
@@ -321,14 +332,17 @@ class AsciiVisualizer:
 
             # Show key routes
             for route in rt.routes:
-                dest = route.destination_cidr_block or route.destination_ipv6_cidr_block or "?"
+                dest = get_route_destination(route)
+                target_kind = get_route_target_kind(route)
 
-                if route.gateway_id and route.gateway_id.startswith("igw-"):
+                if target_kind == "igw":
                     output.append(f"│  {dest} ──→ Internet Gateway")
-                elif route.nat_gateway_id:
+                elif target_kind == "nat":
                     output.append(f"│  {dest} ──→ NAT Gateway")
-                elif route.gateway_id == "local":
+                elif target_kind == "local":
                     output.append(f"│  {dest} ──→ Local (VPC)")
+                else:
+                    output.append(f"│  {dest} ──→ {format_route_target(route)}")
 
             # Show associated subnets
             if rt.subnet_associations:

@@ -5,7 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from vpc_map.models import AuditReport, VpcTopology
+from vpc_map.models import AuditReport, ChangeType, DiffReport, VpcTopology
+from vpc_map.network.analysis import build_network_analysis
 
 
 class JSONReporter:
@@ -60,6 +61,7 @@ class JSONReporter:
         combined = {
             "topology": topology.model_dump(),
             "audit": report.model_dump(),
+            "network_analysis": build_network_analysis(topology),
             "summary": {
                 "vpc_id": topology.vpc.vpc_id,
                 "region": topology.region,
@@ -67,6 +69,12 @@ class JSONReporter:
                     "subnets": len(topology.subnets),
                     "internet_gateways": len(topology.internet_gateways),
                     "nat_gateways": len(topology.nat_gateways),
+                    "flow_logs": len(topology.flow_logs),
+                    "vpc_endpoints": len(topology.vpc_endpoints),
+                    "elastic_ips": len(topology.elastic_ips),
+                    "elastic_ips_unassociated": len(
+                        [elastic_ip for elastic_ip in topology.elastic_ips if not elastic_ip.is_associated]
+                    ),
                     "route_tables": len(topology.route_tables),
                     "security_groups": len(topology.security_groups),
                     "security_groups_in_use": len(
@@ -123,3 +131,34 @@ class JSONReporter:
 
         with open(output_file, "w") as f:
             json.dump(combined, f, indent=2, default=self._serialize_datetime)
+
+    def generate_diff_report(self, diff_report: DiffReport, output_file: Path) -> None:
+        """Generate JSON diff report."""
+        # Build summary counts
+        changes_by_type: dict[str, dict[str, int]] = {}
+        for change in diff_report.resource_changes:
+            counts = changes_by_type.setdefault(
+                change.resource_type, {"added": 0, "removed": 0, "modified": 0}
+            )
+            counts[change.change_type.value] += 1
+
+        added = sum(1 for c in diff_report.resource_changes if c.change_type == ChangeType.ADDED)
+        removed = sum(1 for c in diff_report.resource_changes if c.change_type == ChangeType.REMOVED)
+        modified = sum(1 for c in diff_report.resource_changes if c.change_type == ChangeType.MODIFIED)
+
+        output = {
+            "diff": diff_report.model_dump(mode="json"),
+            "summary": {
+                "vpc_id": diff_report.vpc_id,
+                "before_collected_at": diff_report.before_collected_at.isoformat(),
+                "after_collected_at": diff_report.after_collected_at.isoformat(),
+                "resources_added": added,
+                "resources_removed": removed,
+                "resources_modified": modified,
+                "derived_changes": len(diff_report.derived_changes),
+                "changes_by_resource_type": changes_by_type,
+            },
+        }
+
+        with open(output_file, "w") as f:
+            json.dump(output, f, indent=2, default=self._serialize_datetime)

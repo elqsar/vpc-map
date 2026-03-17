@@ -8,6 +8,8 @@ from botocore.exceptions import ClientError
 from vpc_map.models import (
     EbsVolume,
     Ec2Instance,
+    ElasticIp,
+    FlowLog,
     InternetGateway,
     IpPermission,
     NatGateway,
@@ -19,6 +21,7 @@ from vpc_map.models import (
     Subnet,
     Tag,
     Vpc,
+    VpcEndpoint,
     VpcTopology,
 )
 
@@ -177,6 +180,132 @@ class VpcCollector:
                 e.response["Error"]["Code"],
             )
 
+    def get_flow_logs(self, vpc_id: str, subnet_ids: list[str]) -> list[FlowLog]:
+        """Get VPC and subnet flow logs for a VPC."""
+        try:
+            resource_ids = [vpc_id, *subnet_ids]
+            response = self.ec2_client.describe_flow_logs(
+                Filters=[{"Name": "resource-id", "Values": resource_ids}]
+            )
+
+            flow_logs = []
+            for flow_log_data in response.get("FlowLogs", []):
+                flow_logs.append(
+                    FlowLog(
+                        flow_log_id=flow_log_data["FlowLogId"],
+                        resource_id=flow_log_data["ResourceId"],
+                        resource_type=flow_log_data.get("ResourceType", "Unknown"),
+                        traffic_type=flow_log_data.get("TrafficType", "ALL"),
+                        log_destination_type=flow_log_data.get("LogDestinationType"),
+                        log_destination=flow_log_data.get("LogDestination"),
+                        deliver_logs_status=flow_log_data.get("DeliverLogsStatus"),
+                        flow_log_status=flow_log_data.get("FlowLogStatus"),
+                        log_format=flow_log_data.get("LogFormat"),
+                        tags=self._parse_tags(flow_log_data.get("Tags")),
+                    )
+                )
+
+            return flow_logs
+        except ClientError as e:
+            raise ClientError(
+                f"Failed to get flow logs: {e.response['Error']['Message']}",
+                e.response["Error"]["Code"],
+            )
+
+    def get_vpc_endpoints(self, vpc_id: str) -> list[VpcEndpoint]:
+        """Get all VPC endpoints in a VPC."""
+        try:
+            response = self.ec2_client.describe_vpc_endpoints(
+                Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]
+            )
+
+            vpc_endpoints = []
+            for endpoint_data in response.get("VpcEndpoints", []):
+                security_group_ids = [
+                    group["GroupId"] for group in endpoint_data.get("Groups", [])
+                ]
+                vpc_endpoints.append(
+                    VpcEndpoint(
+                        vpc_endpoint_id=endpoint_data["VpcEndpointId"],
+                        vpc_id=endpoint_data["VpcId"],
+                        service_name=endpoint_data["ServiceName"],
+                        endpoint_type=endpoint_data.get("VpcEndpointType", "Unknown"),
+                        state=endpoint_data.get("State", "unknown"),
+                        private_dns_enabled=endpoint_data.get("PrivateDnsEnabled", False),
+                        subnet_ids=endpoint_data.get("SubnetIds", []),
+                        route_table_ids=endpoint_data.get("RouteTableIds", []),
+                        security_group_ids=security_group_ids,
+                        network_interface_ids=endpoint_data.get("NetworkInterfaceIds", []),
+                        policy_document=endpoint_data.get("PolicyDocument"),
+                        tags=self._parse_tags(endpoint_data.get("Tags")),
+                    )
+                )
+
+            return vpc_endpoints
+        except ClientError as e:
+            raise ClientError(
+                f"Failed to get VPC endpoints: {e.response['Error']['Message']}",
+                e.response["Error"]["Code"],
+            )
+
+    def get_elastic_ips(
+        self,
+        vpc_id: str,
+        nat_gateways: list[NatGateway],
+        ec2_instances: list[Ec2Instance],
+    ) -> list[ElasticIp]:
+        """Get Elastic IPs associated with the VPC plus unattached regional EIPs."""
+        try:
+            response = self.ec2_client.describe_addresses(
+                Filters=[{"Name": "domain", "Values": ["vpc"]}]
+            )
+            eni_response = self.ec2_client.describe_network_interfaces(
+                Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]
+            )
+
+            nat_public_ips = {nat.public_ip for nat in nat_gateways if nat.public_ip}
+            instance_ids = {instance.instance_id for instance in ec2_instances}
+            vpc_eni_ids = {
+                eni["NetworkInterfaceId"] for eni in eni_response.get("NetworkInterfaces", [])
+            }
+
+            elastic_ips = []
+            for address_data in response.get("Addresses", []):
+                association_id = address_data.get("AssociationId")
+                instance_id = address_data.get("InstanceId")
+                network_interface_id = address_data.get("NetworkInterfaceId")
+                public_ip = address_data["PublicIp"]
+
+                in_scope = (
+                    not association_id
+                    or public_ip in nat_public_ips
+                    or instance_id in instance_ids
+                    or network_interface_id in vpc_eni_ids
+                )
+                if not in_scope:
+                    continue
+
+                elastic_ips.append(
+                    ElasticIp(
+                        allocation_id=address_data.get("AllocationId"),
+                        association_id=association_id,
+                        public_ip=public_ip,
+                        private_ip_address=address_data.get("PrivateIpAddress"),
+                        instance_id=instance_id,
+                        network_interface_id=network_interface_id,
+                        network_interface_owner_id=address_data.get("NetworkInterfaceOwnerId"),
+                        domain=address_data.get("Domain"),
+                        tags=self._parse_tags(address_data.get("Tags")),
+                    )
+                )
+
+            return elastic_ips
+        except ClientError as e:
+            raise ClientError(
+                f"Failed to get Elastic IPs: {e.response['Error']['Message']}",
+                e.response["Error"]["Code"],
+            )
+
     def get_route_tables(self, vpc_id: str) -> list[RouteTable]:
         """Get all route tables in a VPC."""
         try:
@@ -195,6 +324,16 @@ class VpcCollector:
                             destination_ipv6_cidr_block=route_data.get("DestinationIpv6CidrBlock"),
                             gateway_id=route_data.get("GatewayId"),
                             nat_gateway_id=route_data.get("NatGatewayId"),
+                            vpc_endpoint_id=route_data.get("VpcEndpointId"),
+                            transit_gateway_id=route_data.get("TransitGatewayId"),
+                            egress_only_internet_gateway_id=route_data.get(
+                                "EgressOnlyInternetGatewayId"
+                            ),
+                            vpn_gateway_id=route_data.get("GatewayId")
+                            if str(route_data.get("GatewayId", "")).startswith("vgw-")
+                            else None,
+                            carrier_gateway_id=route_data.get("CarrierGatewayId"),
+                            local_gateway_id=route_data.get("LocalGatewayId"),
                             network_interface_id=route_data.get("NetworkInterfaceId"),
                             vpc_peering_connection_id=route_data.get("VpcPeeringConnectionId"),
                             instance_id=route_data.get("InstanceId"),
@@ -520,10 +659,13 @@ class VpcCollector:
             subnets = self.get_subnets(vpc_id)
             internet_gateways = self.get_internet_gateways(vpc_id)
             nat_gateways = self.get_nat_gateways(vpc_id)
+            flow_logs = self.get_flow_logs(vpc_id, [subnet.subnet_id for subnet in subnets])
+            vpc_endpoints = self.get_vpc_endpoints(vpc_id)
             route_tables = self.get_route_tables(vpc_id)
             security_groups = self.get_security_groups(vpc_id)
             network_acls = self.get_network_acls(vpc_id)
             ec2_instances = self.get_ec2_instances(vpc_id)
+            elastic_ips = self.get_elastic_ips(vpc_id, nat_gateways, ec2_instances)
             ebs_volumes = self.get_ebs_volumes(vpc_id)
 
             # Get security group usage information
@@ -543,6 +685,9 @@ class VpcCollector:
                 subnets=subnets,
                 internet_gateways=internet_gateways,
                 nat_gateways=nat_gateways,
+                flow_logs=flow_logs,
+                vpc_endpoints=vpc_endpoints,
+                elastic_ips=elastic_ips,
                 route_tables=route_tables,
                 security_groups=security_groups,
                 network_acls=network_acls,

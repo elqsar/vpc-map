@@ -1,6 +1,14 @@
 """Custom security and best practice audit rules."""
 
-from vpc_map.models import AuditCategory, AuditFinding, Severity, VpcTopology
+from vpc_map.models import (
+    AuditCategory,
+    AuditFinding,
+    ExposureState,
+    Severity,
+    SubnetClassification,
+    VpcTopology,
+)
+from vpc_map.network.analysis import analyze_instances, analyze_subnets
 
 
 class CustomSecurityAuditor:
@@ -10,6 +18,12 @@ class CustomSecurityAuditor:
         """Initialize the auditor with VPC topology."""
         self.topology = topology
         self.framework = "Custom Security Checks"
+        self.subnet_analysis = {
+            analysis.subnet_id: analysis for analysis in analyze_subnets(topology)
+        }
+        self.instance_exposure = {
+            exposure.instance_id: exposure for exposure in analyze_instances(topology)
+        }
 
     def audit(self) -> list[AuditFinding]:
         """Run all custom security checks."""
@@ -19,9 +33,14 @@ class CustomSecurityAuditor:
         findings.extend(self._check_security_group_descriptions())
         findings.extend(self._check_unused_security_groups())
         findings.extend(self._check_overlapping_security_rules())
+        findings.extend(self._check_vpc_endpoint_security_groups())
         findings.extend(self._check_nacl_ephemeral_ports())
         findings.extend(self._check_route_table_complexity())
         findings.extend(self._check_public_subnet_auto_assign())
+        findings.extend(self._check_elastic_ips())
+        findings.extend(self._check_instance_reachability())
+        findings.extend(self._check_public_ip_in_non_public_subnet())
+        findings.extend(self._check_internet_path_controls())
         return findings
 
     def _check_resource_tagging(self) -> list[AuditFinding]:
@@ -214,6 +233,39 @@ class CustomSecurityAuditor:
 
         return findings
 
+    def _check_vpc_endpoint_security_groups(self) -> list[AuditFinding]:
+        """Check whether interface endpoint security groups are exposed too broadly."""
+        findings = []
+        security_groups = {sg.group_id: sg for sg in self.topology.security_groups}
+
+        for endpoint in self.topology.vpc_endpoints:
+            if endpoint.endpoint_type.lower() != "interface":
+                continue
+
+            for group_id in endpoint.security_group_ids:
+                security_group = security_groups.get(group_id)
+                if not security_group:
+                    continue
+
+                for rule in security_group.ingress_rules:
+                    if "0.0.0.0/0" in rule.ip_ranges or "::/0" in rule.ipv6_ranges:
+                        findings.append(
+                            AuditFinding(
+                                severity=Severity.HIGH,
+                                category=AuditCategory.SECURITY,
+                                title="Interface Endpoint Security Group Open Broadly",
+                                description=f"Security group '{security_group.group_name}' attached to endpoint {endpoint.vpc_endpoint_id} allows ingress from anywhere.",
+                                resource_id=security_group.group_id,
+                                resource_type="Security Group",
+                                recommendation="Restrict interface endpoint security groups to the specific client subnets or application security groups that need private service access.",
+                                framework=self.framework,
+                                rule_id="CUSTOM-SEC-002",
+                            )
+                        )
+                        break
+
+        return findings
+
     def _check_nacl_ephemeral_ports(self) -> list[AuditFinding]:
         """Check if NACLs properly allow ephemeral ports for return traffic."""
         findings = []
@@ -279,14 +331,10 @@ class CustomSecurityAuditor:
         findings = []
 
         for subnet in self.topology.subnets:
-            # Determine if subnet is public
-            is_public = False
-            for rt in self.topology.route_tables:
-                if subnet.subnet_id in rt.subnet_associations or rt.is_main:
-                    for route in rt.routes:
-                        if route.gateway_id and route.gateway_id.startswith("igw-"):
-                            is_public = True
-                            break
+            is_public = (
+                self.subnet_analysis[subnet.subnet_id].classification
+                == SubnetClassification.PUBLIC
+            )
 
             # Public subnet should have auto-assign enabled
             if is_public and not subnet.map_public_ip_on_launch:
@@ -317,6 +365,159 @@ class CustomSecurityAuditor:
                         recommendation="Disable auto-assign public IP for private subnets to prevent accidental internet exposure.",
                         framework=self.framework,
                         rule_id="CUSTOM-SEC-001",
+                    )
+                )
+
+        return findings
+
+    def _check_elastic_ips(self) -> list[AuditFinding]:
+        """Check Elastic IP associations for waste and unexpected exposure."""
+        findings = []
+        instances = {instance.instance_id: instance for instance in self.topology.ec2_instances}
+
+        for elastic_ip in self.topology.elastic_ips:
+            if not elastic_ip.is_associated:
+                findings.append(
+                    AuditFinding(
+                        severity=Severity.LOW,
+                        category=AuditCategory.COST,
+                        title="Unassociated Elastic IP",
+                        description=f"Elastic IP {elastic_ip.public_ip} is allocated but not associated with any resource.",
+                        resource_id=elastic_ip.allocation_id or elastic_ip.public_ip,
+                        resource_type="Elastic IP",
+                        recommendation="Release unused Elastic IPs to avoid unnecessary charges and reduce public-IP sprawl.",
+                        framework=self.framework,
+                        rule_id="CUSTOM-COST-002",
+                    )
+                )
+                continue
+
+            if elastic_ip.instance_id:
+                instance = instances.get(elastic_ip.instance_id)
+                if (
+                    instance
+                    and self.subnet_analysis[instance.subnet_id].classification
+                    != SubnetClassification.PUBLIC
+                ):
+                    findings.append(
+                        AuditFinding(
+                            severity=Severity.HIGH,
+                            category=AuditCategory.SECURITY,
+                            title="Elastic IP Attached To Instance In Private Subnet",
+                            description=f"Elastic IP {elastic_ip.public_ip} is attached to instance {instance.instance_id} in subnet {instance.subnet_id}, which does not have direct internet gateway routing.",
+                            resource_id=elastic_ip.allocation_id or elastic_ip.public_ip,
+                            resource_type="Elastic IP",
+                            recommendation="Review whether the instance should be publicly addressable. Remove the Elastic IP or move the workload to an intentionally public subnet.",
+                            framework=self.framework,
+                            rule_id="CUSTOM-SEC-003",
+                        )
+                    )
+
+        return findings
+
+    def _check_instance_reachability(self) -> list[AuditFinding]:
+        """Check whether instances are directly reachable on admin ports."""
+        findings = []
+
+        for instance in self.topology.ec2_instances:
+            exposure = self.instance_exposure[instance.instance_id]
+            if (
+                exposure.exposure_state == ExposureState.PUBLICLY_REACHABLE
+                and exposure.open_admin_ports
+            ):
+                findings.append(
+                    AuditFinding(
+                        severity=Severity.CRITICAL,
+                        category=AuditCategory.SECURITY,
+                        title="Instance Reachable From Internet On Admin Port",
+                        description=(
+                            f"Instance {instance.instance_id} is publicly reachable on "
+                            f"admin port(s) {', '.join(map(str, exposure.open_admin_ports))}."
+                        ),
+                        resource_id=instance.instance_id,
+                        resource_type="EC2 Instance",
+                        recommendation="Restrict internet ingress on admin ports by removing public addressing, moving the workload behind controlled access paths, or tightening security groups and NACLs.",
+                        framework=self.framework,
+                        rule_id="CUSTOM-SEC-004",
+                    )
+                )
+
+        return findings
+
+    def _check_public_ip_in_non_public_subnet(self) -> list[AuditFinding]:
+        """Check for public addressing on instances outside public subnets."""
+        findings = []
+
+        for instance in self.topology.ec2_instances:
+            exposure = self.instance_exposure[instance.instance_id]
+            if (
+                exposure.has_public_address
+                and exposure.subnet_classification != SubnetClassification.PUBLIC
+            ):
+                findings.append(
+                    AuditFinding(
+                        severity=Severity.HIGH,
+                        category=AuditCategory.SECURITY,
+                        title="Public IP Attached To Instance In Non-Public Subnet",
+                        description=(
+                            f"Instance {instance.instance_id} has public address source "
+                            f"'{exposure.public_address_source}' in a "
+                            f"{exposure.subnet_classification.value} subnet."
+                        ),
+                        resource_id=instance.instance_id,
+                        resource_type="EC2 Instance",
+                        recommendation="Remove public addressing from workloads outside intentionally public subnets, or correct the subnet routing design if the subnet should be public.",
+                        framework=self.framework,
+                        rule_id="CUSTOM-SEC-005",
+                    )
+                )
+
+        return findings
+
+    def _check_internet_path_controls(self) -> list[AuditFinding]:
+        """Check for internet paths that are inconsistent with SG or NACL controls."""
+        findings = []
+
+        for instance in self.topology.ec2_instances:
+            exposure = self.instance_exposure[instance.instance_id]
+            if not exposure.internet_route or not exposure.has_public_address:
+                continue
+
+            if exposure.allowed_ports and exposure.blocked_ports:
+                findings.append(
+                    AuditFinding(
+                        severity=Severity.MEDIUM,
+                        category=AuditCategory.OPERATIONS,
+                        title="Internet Path Present But NACL Blocks Tracked Traffic",
+                        description=(
+                            f"Instance {instance.instance_id} has an internet route and public "
+                            f"addressing, but the subnet NACL blocks tracked port(s) "
+                            f"{', '.join(map(str, exposure.blocked_ports))}."
+                        ),
+                        resource_id=instance.instance_id,
+                        resource_type="EC2 Instance",
+                        recommendation="Align NACL rules with the intended internet-facing ports, or remove the public route/public address if the workload is not meant to be reachable.",
+                        framework=self.framework,
+                        rule_id="CUSTOM-OPS-010",
+                        compliance_status="WARNING",
+                    )
+                )
+            elif not exposure.security_group_exposure:
+                findings.append(
+                    AuditFinding(
+                        severity=Severity.LOW,
+                        category=AuditCategory.OPERATIONS,
+                        title="Internet Path Present But Security Groups Block Tracked Traffic",
+                        description=(
+                            f"Instance {instance.instance_id} has an internet route and public "
+                            "addressing, but no tracked security group ingress rule is open to the internet."
+                        ),
+                        resource_id=instance.instance_id,
+                        resource_type="EC2 Instance",
+                        recommendation="Either remove unnecessary public routing/public addressing or document that the workload is intentionally non-public despite having an internet path.",
+                        framework=self.framework,
+                        rule_id="CUSTOM-OPS-011",
+                        compliance_status="WARNING",
                     )
                 )
 
