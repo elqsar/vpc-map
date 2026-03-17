@@ -214,6 +214,91 @@ def test_analyze_instances_detects_public_admin_exposure():
     assert exposure.allowed_ports == [22]
 
 
+def test_analyze_instances_detects_non_admin_public_service_exposure():
+    """Public exposure should not be limited to a tiny built-in port list."""
+    vpc = create_vpc()
+    instance = Ec2Instance(
+        instance_id="i-redis",
+        instance_type="t3.micro",
+        state="running",
+        subnet_id="subnet-public",
+        vpc_id=vpc.vpc_id,
+        availability_zone="us-east-1a",
+        public_ip_address="198.51.100.11",
+        security_groups=["sg-redis"],
+        ami_id="ami-12345",
+    )
+    topology = VpcTopology(
+        vpc=vpc,
+        subnets=[
+            Subnet(
+                subnet_id="subnet-public",
+                vpc_id=vpc.vpc_id,
+                cidr_block="10.0.1.0/24",
+                availability_zone="us-east-1a",
+                available_ip_address_count=250,
+                state="available",
+            )
+        ],
+        route_tables=[
+            RouteTable(
+                route_table_id="rtb-public",
+                vpc_id=vpc.vpc_id,
+                subnet_associations=["subnet-public"],
+                routes=[
+                    Route(
+                        destination_cidr_block="0.0.0.0/0",
+                        gateway_id="igw-12345",
+                        state="active",
+                        origin="CreateRoute",
+                    )
+                ],
+            )
+        ],
+        security_groups=[
+            SecurityGroup(
+                group_id="sg-redis",
+                group_name="redis",
+                description="redis",
+                vpc_id=vpc.vpc_id,
+                ingress_rules=[
+                    IpPermission(
+                        ip_protocol="tcp",
+                        from_port=6379,
+                        to_port=6379,
+                        ip_ranges=["0.0.0.0/0"],
+                    )
+                ],
+            )
+        ],
+        network_acls=[
+            NetworkAcl(
+                nacl_id="acl-public",
+                vpc_id=vpc.vpc_id,
+                entries=[
+                    NetworkAclEntry(
+                        rule_number=100,
+                        protocol="6",
+                        rule_action="allow",
+                        egress=False,
+                        cidr_block="0.0.0.0/0",
+                        port_range={"From": 6379, "To": 6379},
+                    )
+                ],
+                subnet_associations=["subnet-public"],
+            )
+        ],
+        ec2_instances=[instance],
+        region="us-east-1",
+    )
+
+    exposure = analyze_instances(topology)[0]
+
+    assert exposure.exposure_state.value == "publicly_reachable"
+    assert exposure.open_admin_ports == []
+    assert exposure.allowed_ports == [6379]
+
+
 def test_get_route_target_kind_supports_expanded_targets():
     """Route target normalization should expose additional AWS route targets."""
     assert (

@@ -19,7 +19,7 @@ from vpc_map.models import (
     VpcTopology,
 )
 
-INTERESTING_PORTS = (22, 80, 443, 3389, 3306, 5432)
+INTERESTING_PORTS = (22, 80, 443, 1433, 3306, 3389, 5432, 5984, 6379, 8080, 8443, 9200, 27017)
 ADMIN_PORTS = {22, 3389}
 
 
@@ -177,22 +177,23 @@ def analyze_instance_exposure(
     security_groups = {
         security_group.group_id: security_group for security_group in topology.security_groups
     }
+    internet_open_rules = [
+        rule
+        for group_id in instance.security_groups
+        for rule in _get_internet_open_rules(security_groups.get(group_id))
+    ]
     allowed_ports = sorted(
-        {
-            port
-            for group_id in instance.security_groups
-            for port in _get_security_group_open_ports(security_groups.get(group_id))
-        }
+        {port for rule in internet_open_rules for port in _sample_ports_for_rule(rule)}
     )
     open_admin_ports = [port for port in allowed_ports if port in ADMIN_PORTS]
-    security_group_exposure = bool(allowed_ports)
+    security_group_exposure = bool(internet_open_rules)
 
     network_acl = get_network_acl_for_subnet(topology, instance.subnet_id)
     nacl_allowed_ports = sorted(
         port for port in allowed_ports if _network_acl_allows_port(network_acl, port)
     )
     blocked_ports = sorted(port for port in allowed_ports if port not in nacl_allowed_ports)
-    nacl_exposure = bool(nacl_allowed_ports)
+    nacl_exposure = any(_network_acl_allows_rule(network_acl, rule) for rule in internet_open_rules)
 
     explanations = []
     if not internet_route:
@@ -202,7 +203,7 @@ def analyze_instance_exposure(
     if allowed_ports:
         explanations.append(f"Security groups allow internet ingress on ports {', '.join(map(str, allowed_ports))}.")
     else:
-        explanations.append("No internet-open security group rule found on tracked ports.")
+        explanations.append("No internet-open security group rule found.")
     if blocked_ports:
         explanations.append(f"Network ACL blocks tracked ports {', '.join(map(str, blocked_ports))}.")
 
@@ -301,20 +302,24 @@ def _get_public_address_source(topology: VpcTopology, instance: Ec2Instance) -> 
     return None
 
 
-def _get_security_group_open_ports(security_group: Optional[SecurityGroup]) -> set[int]:
+def _get_internet_open_rules(security_group: Optional[SecurityGroup]) -> list[IpPermission]:
     if security_group is None:
-        return set()
+        return []
 
-    allowed_ports = set()
-    for rule in security_group.ingress_rules:
-        if not _is_internet_rule(rule):
-            continue
+    return [rule for rule in security_group.ingress_rules if _is_internet_rule(rule)]
 
-        for port in INTERESTING_PORTS:
-            if _rule_matches_port(rule, port):
-                allowed_ports.add(port)
 
-    return allowed_ports
+def _sample_ports_for_rule(rule: IpPermission) -> set[int]:
+    """Return representative ports for reporting and NACL overlap checks."""
+    if rule.ip_protocol in {"-1", "all"} or rule.from_port is None or rule.to_port is None:
+        return set(INTERESTING_PORTS)
+
+    if rule.from_port == rule.to_port:
+        return {rule.from_port}
+
+    sampled_ports = {rule.from_port, rule.to_port}
+    sampled_ports.update(port for port in INTERESTING_PORTS if _rule_matches_port(rule, port))
+    return sampled_ports
 
 
 def _is_internet_rule(rule: IpPermission) -> bool:
@@ -347,6 +352,15 @@ def _network_acl_allows_port(network_acl: Optional[NetworkAcl], port: int) -> bo
         return False
 
     return inbound_entries[0].rule_action == "allow"
+
+
+def _network_acl_allows_rule(network_acl: Optional[NetworkAcl], rule: IpPermission) -> bool:
+    """Check whether the subnet NACL allows any representative port from the SG rule."""
+    if network_acl is None:
+        return False
+
+    sample_ports = _sample_ports_for_rule(rule)
+    return any(_network_acl_allows_port(network_acl, port) for port in sample_ports)
 
 
 def _entry_matches_internet(entry: NetworkAclEntry) -> bool:

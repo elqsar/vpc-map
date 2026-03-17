@@ -3,7 +3,7 @@
 import base64
 from pathlib import Path
 
-from jinja2 import Template
+from jinja2 import Environment
 
 from vpc_map.models import AuditReport, ChangeType, DiffReport, VpcTopology
 
@@ -684,6 +684,10 @@ DIFF_HTML_TEMPLATE = """
 class HTMLReporter:
     """Generate HTML format reports."""
 
+    def __init__(self) -> None:
+        """Initialize a Jinja environment with escaping enabled."""
+        self.environment = Environment(autoescape=True)
+
     def generate_report(
         self,
         topology: VpcTopology,
@@ -863,7 +867,7 @@ class HTMLReporter:
         }
 
         # Render template
-        template = Template(HTML_TEMPLATE)
+        template = self.environment.from_string(HTML_TEMPLATE)
         html_content = template.render(**template_data)
 
         # Write to file
@@ -923,7 +927,7 @@ class HTMLReporter:
             "derived_changes": derived,
         }
 
-        template = Template(DIFF_HTML_TEMPLATE)
+        template = self.environment.from_string(DIFF_HTML_TEMPLATE)
         html_content = template.render(**template_data)
 
         with open(output_file, "w") as f:

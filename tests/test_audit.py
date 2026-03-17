@@ -306,6 +306,68 @@ def test_custom_endpoint_security_group_open_broadly():
     assert any(f.title == "Interface Endpoint Security Group Open Broadly" for f in findings)
 
 
+def test_custom_unused_security_group_uses_actual_attachment_state():
+    """Attached egress-only groups should not be reported as unused."""
+    vpc = create_test_vpc()
+    attached_sg = SecurityGroup(
+        group_id="sg-egress",
+        group_name="egress-only",
+        description="egress only",
+        vpc_id=vpc.vpc_id,
+        egress_rules=[IpPermission(ip_protocol="-1", ip_ranges=["0.0.0.0/0"])],
+        is_in_use=True,
+        attached_enis=["eni-12345"],
+    )
+    unused_sg = SecurityGroup(
+        group_id="sg-unused",
+        group_name="unused",
+        description="unused",
+        vpc_id=vpc.vpc_id,
+        is_in_use=False,
+    )
+    topology = VpcTopology(
+        vpc=vpc,
+        security_groups=[attached_sg, unused_sg],
+        region="us-east-1",
+    )
+    auditor = CustomSecurityAuditor(topology)
+
+    findings = auditor._check_unused_security_groups()
+
+    assert [f.resource_id for f in findings] == ["sg-unused"]
+
+
+def test_custom_nacl_ephemeral_check_accepts_32768_to_65535():
+    """A common ephemeral egress range should satisfy the rule."""
+    vpc = create_test_vpc()
+    topology = VpcTopology(
+        vpc=vpc,
+        network_acls=[
+            NetworkAcl(
+                nacl_id="acl-ephemeral",
+                vpc_id=vpc.vpc_id,
+                entries=[
+                    NetworkAclEntry(
+                        rule_number=100,
+                        protocol="6",
+                        rule_action="allow",
+                        egress=True,
+                        cidr_block="0.0.0.0/0",
+                        port_range={"From": 32768, "To": 65535},
+                    )
+                ],
+                subnet_associations=["subnet-12345"],
+            )
+        ],
+        region="us-east-1",
+    )
+    auditor = CustomSecurityAuditor(topology)
+
+    findings = auditor._check_nacl_ephemeral_ports()
+
+    assert findings == []
+
+
 def test_custom_unassociated_elastic_ip():
     """Test unassociated Elastic IP cost finding."""
     vpc = create_test_vpc()

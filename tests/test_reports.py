@@ -6,6 +6,8 @@ import json
 from rich.console import Console
 
 from vpc_map.models import (
+    AuditCategory,
+    AuditFinding,
     AuditReport,
     Ec2Instance,
     ElasticIp,
@@ -16,7 +18,9 @@ from vpc_map.models import (
     Route,
     RouteTable,
     SecurityGroup,
+    Severity,
     Subnet,
+    Tag,
     Vpc,
     VpcEndpoint,
     VpcTopology,
@@ -163,6 +167,34 @@ def test_html_report_renders_phase1_sections(tmp_path):
     assert "Flow Logs (1)" in content
     assert "VPC Endpoints (1)" in content
     assert "Elastic IPs (1)" in content
+
+
+def test_html_report_escapes_resource_and_finding_content(tmp_path):
+    """HTML report content should be escaped before writing to disk."""
+    topology = _create_topology()
+    topology.subnets[0].tags = [Tag(key="Name", value="<script>alert(1)</script>")]
+    report = AuditReport(vpc_id=topology.vpc.vpc_id, region=topology.region)
+    report.add_finding(
+        AuditFinding(
+            severity=Severity.HIGH,
+            category=AuditCategory.SECURITY,
+            title="<b>bad</b>",
+            description="<img src=x onerror=alert(1)>",
+            resource_id="sg-12345",
+            resource_type="Security Group",
+            recommendation="<script>doEvil()</script>",
+            framework="Custom",
+            rule_id="TEST-001",
+        )
+    )
+    output_file = tmp_path / "report.html"
+
+    HTMLReporter().generate_report(topology, report, output_file)
+
+    content = output_file.read_text()
+    assert "<script>alert(1)</script>" not in content
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in content
+    assert "&lt;img src=x onerror=alert(1)&gt;" in content
 
 
 def test_terminal_report_prints_phase1_tables():

@@ -182,17 +182,16 @@ class CustomSecurityAuditor:
             if sg.group_name == "default":
                 continue
 
-            # Security group with no ingress rules might be unused
-            if not sg.ingress_rules and len(sg.egress_rules) <= 1:
+            if not sg.is_in_use:
                 findings.append(
                     AuditFinding(
                         severity=Severity.LOW,
                         category=AuditCategory.COST,
                         title="Potentially Unused Security Group",
-                        description=f"Security group '{sg.group_name}' has no ingress rules and minimal egress rules.",
+                        description=f"Security group '{sg.group_name}' is not attached to any network interfaces.",
                         resource_id=sg.group_id,
                         resource_type="Security Group",
-                        recommendation="Review if this security group is in use. Delete unused security groups to reduce clutter.",
+                        recommendation="Review whether this security group is still needed. Delete unused groups to reduce clutter and tighten rule management.",
                         framework=self.framework,
                         rule_id="CUSTOM-COST-001",
                     )
@@ -281,8 +280,8 @@ class CustomSecurityAuditor:
                     if entry.port_range:
                         from_port = entry.port_range.get("From", 0)
                         to_port = entry.port_range.get("To", 65535)
-                        # Ephemeral ports are typically 1024-65535 or 32768-65535
-                        if from_port <= 1024 and to_port >= 65535:
+                        # Ephemeral ranges commonly include 1024-65535 or 32768-65535.
+                        if from_port <= 32768 and to_port >= 65535:
                             has_ephemeral_allow = True
                             break
 
